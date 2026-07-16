@@ -1,0 +1,29 @@
+import type { ReactNode } from "react";
+import {
+  ReportErrorButton,
+} from "@/components/relatar-erro";
+import { AppHeader } from "@/components/app-header";
+import { AppSidebar } from "@/components/app-sidebar";
+
+type AppShellProps = {
+  children: ReactNode;
+};
+
+export function AppShell({ children }: AppShellProps) {
+  return (
+    <div className="min-h-screen bg-muted/30">
+      <AppHeader />
+
+      <div className="flex">
+        <AppSidebar />
+
+        <main className="min-w-0 flex-1">
+          <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+            {children}
+            <ReportErrorButton />
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}

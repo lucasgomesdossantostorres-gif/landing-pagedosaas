@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  buscarLimitesCorrecaoDoUsuario,
+  devolverCorrecaoMensal,
+  reservarCorrecaoMensal,
+} from "@/lib/correction/usage";
+
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PROMPT_VERSION = "nivel-2-gabarito-v2";
+const PROMPT_VERSION = "nivel-2-feedback-criterios-v4";
+
 const MODEL_NAME =
   process.env.OPENAI_CONTENT_MODEL ||
   process.env.OPENAI_VALIDATION_MODEL ||
@@ -31,15 +38,33 @@ type QuestaoBanco = {
   maximum_score: number | null;
 };
 
+type StatusCriterio =
+  | "atendeu"
+  | "atendeu_parcialmente"
+  | "nao_atendeu";
+
+type FeedbackPorCriterio = {
+  criterion: string;
+  evaluation: string;
+  status: StatusCriterio;
+};
+
 type ResultadoNivel2LLM = {
   score: number;
-  overall_feedback: string;
-  covered_points: string[];
-  missing_points: string[];
-  incorrect_points: string[];
+  feedback: string;
   strengths: string[];
-  weaknesses: string[];
-  improvement_suggestions: string[];
+  improvement_priorities: string[];
+  criteria_feedback: FeedbackPorCriterio[];
+};
+
+type CorrecaoExistenteBanco = {
+  id: number;
+  content_score: number | string | null;
+  content_maximum_score: number | string | null;
+  content_feedback: string | null;
+  strengths: string | null;
+  weaknesses: string | null;
+  criteria_feedback: FeedbackPorCriterio[] | null;
 };
 
 type OpenAIResponse = {
@@ -73,33 +98,112 @@ function texto(value: string | null | undefined) {
 
 function arredondar(value: number, casas = 2) {
   const fator = 10 ** casas;
-  return Math.round((value + Number.EPSILON) * fator) / fator;
+
+  return (
+    Math.round((value + Number.EPSILON) * fator) /
+    fator
+  );
 }
 
-function limitarNota(value: unknown, maximumScore: number) {
+function limitarNota(
+  value: unknown,
+  maximumScore: number,
+) {
   const numero = Number(value);
 
   if (!Number.isFinite(numero)) {
     return 0;
   }
 
-  return arredondar(Math.min(maximumScore, Math.max(0, numero)));
+  return arredondar(
+    Math.min(maximumScore, Math.max(0, numero)),
+  );
 }
 
-function normalizarLista(value: unknown) {
+function normalizarLista(
+  value: unknown,
+  maximumItems = 5,
+) {
   if (!Array.isArray(value)) {
     return [];
   }
 
   return value
     .map((item) => String(item).trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, maximumItems);
+}
+
+function normalizarFeedbackPorCriterio(
+  value: unknown,
+): FeedbackPorCriterio[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const statusPermitidos = new Set<StatusCriterio>([
+    "atendeu",
+    "atendeu_parcialmente",
+    "nao_atendeu",
+  ]);
+
+  return value
+    .map((item): FeedbackPorCriterio | null => {
+      if (
+        typeof item !== "object" ||
+        item === null
+      ) {
+        return null;
+      }
+
+      const dados = item as Record<
+        string,
+        unknown
+      >;
+
+      const criterion = String(
+        dados.criterion ?? "",
+      ).trim();
+
+      const evaluation = String(
+        dados.evaluation ?? "",
+      ).trim();
+
+      const status = String(
+        dados.status ?? "",
+      ).trim() as StatusCriterio;
+
+      if (
+        !criterion ||
+        !evaluation ||
+        !statusPermitidos.has(status)
+      ) {
+        return null;
+      }
+
+      return {
+        criterion,
+        evaluation,
+        status,
+      };
+    })
+    .filter(
+      (
+        item,
+      ): item is FeedbackPorCriterio =>
+        item !== null,
+    )
+    .slice(0, 10);
 }
 
 function listaComoTexto(items: string[]) {
-  return items.length > 0
-    ? items.map((item) => `• ${item}`).join("\n")
-    : null;
+  if (items.length === 0) {
+    return null;
+  }
+
+  return items
+    .map((item) => `• ${item}`)
+    .join("\n");
 }
 
 async function registrarExecucao(params: {
@@ -115,23 +219,33 @@ async function registrarExecucao(params: {
   errorMessage?: string | null;
 }) {
   try {
-    await params.admin.from("correction_runs").insert({
-      answer_id: params.answerId,
-      correction_id: params.correctionId ?? null,
-      stage: "level_2_content",
-      status: params.status,
-      model_used: MODEL_NAME,
-      prompt_version: PROMPT_VERSION,
-      input_data: params.inputData ?? null,
-      output_data: params.outputData ?? null,
-      processing_time_ms: params.processingTimeMs ?? null,
-      input_tokens: params.inputTokens ?? null,
-      output_tokens: params.outputTokens ?? null,
-      error_message: params.errorMessage ?? null,
-      created_at: new Date().toISOString(),
-    });
+    await params.admin
+      .from("correction_runs")
+      .insert({
+        answer_id: params.answerId,
+        correction_id:
+          params.correctionId ?? null,
+        stage: "level_2_content",
+        status: params.status,
+        model_used: MODEL_NAME,
+        prompt_version: PROMPT_VERSION,
+        input_data: params.inputData ?? null,
+        output_data: params.outputData ?? null,
+        processing_time_ms:
+          params.processingTimeMs ?? null,
+        input_tokens:
+          params.inputTokens ?? null,
+        output_tokens:
+          params.outputTokens ?? null,
+        error_message:
+          params.errorMessage ?? null,
+        created_at: new Date().toISOString(),
+      });
   } catch {
-    // A auditoria não deve impedir a correção principal.
+    /*
+     * A falha no registro de auditoria não deve impedir
+     * a correção principal.
+     */
   }
 }
 
@@ -144,7 +258,9 @@ async function chamarOpenAI(params: {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    throw new Error("A variável OPENAI_API_KEY não está configurada.");
+    throw new Error(
+      "A variável OPENAI_API_KEY não está configurada.",
+    );
   }
 
   const response = await fetch(
@@ -161,29 +277,37 @@ async function chamarOpenAI(params: {
           {
             role: "system",
             content: `
-Você é o Nível 2 de um sistema de correção de respostas discursivas de concursos públicos.
+Você corrige exclusivamente o conteúdo de respostas discursivas de concursos públicos.
 
-Avalie exclusivamente o conteúdo da resposta do candidato, comparando-a com:
-1. o enunciado;
-2. o gabarito oficial;
-3. a nota máxima da questão.
-Por prova pode haver mais de uma questão e gabarito. 
-Avalie sobre qual questão a resposta se refere, e assim corrija baseado no gabarito referente a questão respondida.
+Utilize somente:
+- o enunciado fornecido;
+- o gabarito oficial fornecido;
+- a resposta do candidato;
+- a nota máxima informada.
+
+Principal desafio:
+- entender a profundidade do gabarito para avaliar a resposta de forma precisa, evitando notas excessivamente altas.
+
+Sua tarefa é:
+1. atribuir uma nota entre zero e a nota máxima;
+2. escrever uma explicação completa e estruturada da nota;
+3. indicar cinco pontos fortes;
+4. indicar cinco prioridades de melhoria;
+5. avaliar separadamente cada exigência relevante do enunciado, apresentando feedback por critério.
 
 Regras obrigatórias:
-- atribua uma nota entre zero e a nota máxima;
-- avalie a proximidade substancial entre a resposta e o padrão oficial;
-- reconheça respostas equivalentes mesmo quando usam palavras diferentes;
-- não exija repetição literal do gabarito;
-- não avalie ortografia, gramática, pontuação ou estilo;
-- não desconte erros linguísticos nesta etapa;
-- não invente exigências ausentes do enunciado ou do gabarito;
-- não premie conteúdo irrelevante;
-- identifique os pontos atendidos;
-- identifique os pontos ausentes;
-- identifique afirmações incorretas;
-- explique objetivamente a nota;
-- não reproduza integralmente o gabarito.
+- caso aja incompatibilidade enunciado/gabarito, não respoda e informe o erro;
+- seja acertivo, mas crie grandes respostas;
+- não exija reprodução literal do padrão oficial;
+- não desconte erros linguísticos;
+- relacione claramente a explicação com a nota atribuída;
+- em "criteria_feedback", crie um item para cada exigência ou critério relevante do enunciado;
+- o campo "criterion" deve identificar o critério avaliado;
+- o campo "evaluation" deve explicar o que o candidato acertou, omitiu ou desenvolveu parcialmente;
+- o campo "status" deve ser exatamente "atendeu", "atendeu_parcialmente" ou "nao_atendeu";
+- não repita integralmente o feedback geral dentro dos critérios;
+- mantenha os pontos fortes e as prioridades de melhoria, específicos e sem repetição.
+
             `.trim(),
           },
           {
@@ -210,48 +334,71 @@ ${params.respostaAluno}
         response_format: {
           type: "json_schema",
           json_schema: {
-            name: "nivel_2_correcao_direta_gabarito",
+            name: "nivel_2_feedback_criterios",
             strict: true,
             schema: {
               type: "object",
               additionalProperties: false,
               properties: {
-                score: { type: "number" },
-                overall_feedback: { type: "string" },
-                covered_points: {
-                  type: "array",
-                  items: { type: "string" },
+                score: {
+                  type: "number",
                 },
-                missing_points: {
-                  type: "array",
-                  items: { type: "string" },
-                },
-                incorrect_points: {
-                  type: "array",
-                  items: { type: "string" },
+                feedback: {
+                  type: "string",
                 },
                 strengths: {
                   type: "array",
-                  items: { type: "string" },
+                  minItems: 1,
+                  maxItems: 5,
+                  items: {
+                    type: "string",
+                  },
                 },
-                weaknesses: {
+                improvement_priorities: {
                   type: "array",
-                  items: { type: "string" },
+                  minItems: 1,
+                  maxItems: 5,
+                  items: {
+                    type: "string",
+                  },
                 },
-                improvement_suggestions: {
+                criteria_feedback: {
                   type: "array",
-                  items: { type: "string" },
+                  minItems: 1,
+                  maxItems: 10,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      criterion: {
+                        type: "string",
+                      },
+                      evaluation: {
+                        type: "string",
+                      },
+                      status: {
+                        type: "string",
+                        enum: [
+                          "atendeu",
+                          "atendeu_parcialmente",
+                          "nao_atendeu",
+                        ],
+                      },
+                    },
+                    required: [
+                      "criterion",
+                      "evaluation",
+                      "status",
+                    ],
+                  },
                 },
               },
               required: [
                 "score",
-                "overall_feedback",
-                "covered_points",
-                "missing_points",
-                "incorrect_points",
+                "feedback",
                 "strengths",
-                "weaknesses",
-                "improvement_suggestions",
+                "improvement_priorities",
+                "criteria_feedback",
               ],
             },
           },
@@ -260,40 +407,55 @@ ${params.respostaAluno}
     },
   );
 
-  const body = (await response.json()) as OpenAIResponse;
+  const body =
+    (await response.json()) as OpenAIResponse;
 
   if (!response.ok) {
     throw new Error(
-      body.error?.message || "A OpenAI recusou a solicitação de correção.",
+      body.error?.message ||
+        "A OpenAI recusou a solicitação de correção.",
     );
   }
 
-  const content = body.choices?.[0]?.message?.content;
+  const content =
+    body.choices?.[0]?.message?.content;
 
   if (!content) {
-    throw new Error("A OpenAI não retornou o resultado da correção.");
+    throw new Error(
+      "A OpenAI não retornou o resultado da correção.",
+    );
   }
 
   let resultado: ResultadoNivel2LLM;
 
   try {
-    resultado = JSON.parse(content) as ResultadoNivel2LLM;
+    resultado =
+      JSON.parse(content) as ResultadoNivel2LLM;
   } catch {
-    throw new Error("O resultado da correção não pôde ser interpretado.");
+    throw new Error(
+      "O resultado da correção não pôde ser interpretado.",
+    );
   }
 
   return {
     resultado,
-    inputTokens: body.usage?.prompt_tokens ?? null,
-    outputTokens: body.usage?.completion_tokens ?? null,
+    inputTokens:
+      body.usage?.prompt_tokens ?? null,
+    outputTokens:
+      body.usage?.completion_tokens ?? null,
   };
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest,
+) {
   const inicio = Date.now();
 
   let answerId: number | null = null;
   let correctionId: number | null = null;
+  let userId = "";
+  let reservaAtiva = false;
+  let periodoReservado = "";
 
   try {
     const supabase = await createClient();
@@ -304,26 +466,44 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return responderErro("Usuário não autenticado.", 401);
+      return responderErro(
+        "Usuário não autenticado.",
+        401,
+      );
     }
+
+    userId = user.id;
 
     let body: CorpoRequisicao;
 
     try {
-      body = (await request.json()) as CorpoRequisicao;
+      body =
+        (await request.json()) as CorpoRequisicao;
     } catch {
-      return responderErro("Corpo da requisição inválido.", 400);
+      return responderErro(
+        "Corpo da requisição inválido.",
+        400,
+      );
     }
 
     answerId = Number(body.answer_id);
 
-    if (!Number.isInteger(answerId) || answerId <= 0) {
-      return responderErro("Identificador da resposta inválido.", 400);
+    if (
+      !Number.isInteger(answerId) ||
+      answerId <= 0
+    ) {
+      return responderErro(
+        "Identificador da resposta inválido.",
+        400,
+      );
     }
 
     const admin = createAdminClient();
 
-    const { data: respostaData, error: respostaError } = await admin
+    const {
+      data: respostaData,
+      error: respostaError,
+    } = await admin
       .from("user_answers")
       .select(`
         id,
@@ -344,17 +524,29 @@ export async function POST(request: NextRequest) {
     }
 
     if (!respostaData) {
-      return responderErro("Resposta não encontrada.", 404);
+      return responderErro(
+        "Resposta não encontrada.",
+        404,
+      );
     }
 
-    const resposta = respostaData as RespostaBanco;
-    const respostaAluno = texto(resposta.answer_text);
+    const resposta =
+      respostaData as RespostaBanco;
+
+    const respostaAluno =
+      texto(resposta.answer_text);
 
     if (!respostaAluno) {
-      return responderErro("A resposta está vazia.", 422);
+      return responderErro(
+        "A resposta está vazia.",
+        422,
+      );
     }
 
-    const { data: validacao, error: validacaoError } = await admin
+    const {
+      data: validacao,
+      error: validacaoError,
+    } = await admin
       .from("question_validations")
       .select(`
         status,
@@ -362,7 +554,10 @@ export async function POST(request: NextRequest) {
         feedback,
         confidence
       `)
-      .eq("question_id", resposta.question_id)
+      .eq(
+        "question_id",
+        resposta.question_id,
+      )
       .maybeSingle();
 
     if (validacaoError) {
@@ -377,23 +572,28 @@ export async function POST(request: NextRequest) {
       validacao.status !== "approved" ||
       validacao.semantic_valid !== true
     ) {
-      return responderErro("A questão não está aprovada no Nível 1.", 409);
+      return responderErro(
+        "A questão não está aprovada no Nível 1.",
+        409,
+      );
     }
 
-    const { data: correcaoExistente, error: correcaoExistenteError } =
-      await admin
-        .from("corrections")
-        .select(`
-          id,
-          content_score,
-          content_maximum_score,
-          content_feedback,
-          strengths,
-          weaknesses,
-          improvement_suggestions
-        `)
-        .eq("answer_id", answerId)
-        .maybeSingle();
+    const {
+      data: correcaoExistenteData,
+      error: correcaoExistenteError,
+    } = await admin
+      .from("corrections")
+      .select(`
+        id,
+        content_score,
+        content_maximum_score,
+        content_feedback,
+        strengths,
+        weaknesses,
+        criteria_feedback
+      `)
+      .eq("answer_id", answerId)
+      .maybeSingle();
 
     if (correcaoExistenteError) {
       return responderErro(
@@ -402,28 +602,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const correcaoExistente =
+      correcaoExistenteData as
+        | CorrecaoExistenteBanco
+        | null;
+
     if (
       correcaoExistente &&
       correcaoExistente.content_feedback &&
-      correcaoExistente.content_score !== null
+      correcaoExistente.content_score !== null &&
+      Array.isArray(
+        correcaoExistente.criteria_feedback,
+      ) &&
+      correcaoExistente.criteria_feedback.length > 0
     ) {
       return NextResponse.json({
         success: true,
         cached: true,
-        correction_id: correcaoExistente.id,
-        content_score: Number(correcaoExistente.content_score ?? 0),
-        content_maximum_score: Number(
-          correcaoExistente.content_maximum_score ?? 0,
+        correction_id:
+          correcaoExistente.id,
+        content_score: Number(
+          correcaoExistente.content_score ?? 0,
         ),
-        content_feedback: correcaoExistente.content_feedback,
-        strengths: correcaoExistente.strengths,
-        weaknesses: correcaoExistente.weaknesses,
-        improvement_suggestions:
-          correcaoExistente.improvement_suggestions,
+        content_maximum_score: Number(
+          correcaoExistente
+            .content_maximum_score ?? 0,
+        ),
+        content_feedback:
+          correcaoExistente.content_feedback,
+        strengths:
+          correcaoExistente.strengths,
+        improvement_priorities:
+          correcaoExistente.weaknesses,
+        criteria_feedback:
+          correcaoExistente.criteria_feedback,
       });
     }
 
-    const { data: questaoData, error: questaoError } = await admin
+    const {
+      data: questaoData,
+      error: questaoError,
+    } = await admin
       .from("questions")
       .select(`
         id,
@@ -431,17 +650,30 @@ export async function POST(request: NextRequest) {
         reference_answer,
         maximum_score
       `)
-      .eq("id", resposta.question_id)
+      .eq(
+        "id",
+        resposta.question_id,
+      )
       .single();
 
     if (questaoError || !questaoData) {
-      return responderErro("Questão não encontrada.", 404);
+      return responderErro(
+        "Questão não encontrada.",
+        404,
+      );
     }
 
-    const questao = questaoData as QuestaoBanco;
-    const enunciado = texto(questao.statement);
-    const gabarito = texto(questao.reference_answer);
-    const maximumScore = Number(questao.maximum_score ?? 0);
+    const questao =
+      questaoData as QuestaoBanco;
+
+    const enunciado =
+      texto(questao.statement);
+
+    const gabarito =
+      texto(questao.reference_answer);
+
+    const maximumScore =
+      Number(questao.maximum_score ?? 0);
 
     if (!enunciado || !gabarito) {
       return responderErro(
@@ -450,9 +682,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!Number.isFinite(maximumScore) || maximumScore <= 0) {
-      return responderErro("A questão não possui nota máxima válida.", 422);
+    if (
+      !Number.isFinite(maximumScore) ||
+      maximumScore <= 0
+    ) {
+      return responderErro(
+        "A questão não possui nota máxima válida.",
+        422,
+      );
     }
+
+    const limites =
+      await buscarLimitesCorrecaoDoUsuario(
+        user.id,
+      );
+
+    const reserva =
+      await reservarCorrecaoMensal(
+        user.id,
+        limites.monthlyCorrections,
+        answerId,
+      );
+
+    if (!reserva.allowed) {
+      return responderErro(
+        `Você atingiu o limite mensal de ${limites.monthlyCorrections} correções do plano ${limites.displayName}.`,
+        429,
+      );
+    }
+
+    reservaAtiva =
+      reserva.reservationStatus === "reserved";
+    periodoReservado = reserva.periodStart;
 
     await registrarExecucao({
       admin,
@@ -460,83 +721,124 @@ export async function POST(request: NextRequest) {
       correctionId: null,
       status: "processing",
       inputData: {
-        question_id: resposta.question_id,
+        question_id:
+          resposta.question_id,
         maximum_score: maximumScore,
-        correction_mode: "direct_reference_answer",
+        correction_mode:
+          "single_complete_feedback_with_criteria",
       },
     });
 
-    const { resultado, inputTokens, outputTokens } = await chamarOpenAI({
+    const {
+      resultado,
+      inputTokens,
+      outputTokens,
+    } = await chamarOpenAI({
       enunciado,
       gabarito,
       respostaAluno,
       maximumScore,
     });
 
-    const contentScore = limitarNota(resultado.score, maximumScore);
-    const coveredPoints = normalizarLista(resultado.covered_points);
-    const missingPoints = normalizarLista(resultado.missing_points);
-    const incorrectPoints = normalizarLista(resultado.incorrect_points);
-    const strengths = normalizarLista(resultado.strengths);
-    const weaknesses = normalizarLista(resultado.weaknesses);
-    const improvementSuggestions = normalizarLista(
-      resultado.improvement_suggestions,
+    const contentScore = limitarNota(
+      resultado.score,
+      maximumScore,
     );
 
-    const feedbackParts = [
-      texto(resultado.overall_feedback) || "Correção de conteúdo concluída.",
-    ];
+    const contentFeedback =
+      texto(resultado.feedback) ||
+      "Correção de conteúdo concluída.";
 
-    if (coveredPoints.length > 0) {
-      feedbackParts.push(
-        `Pontos atendidos:\n${coveredPoints
-          .map((item) => `• ${item}`)
-          .join("\n")}`,
+    const strengths = normalizarLista(
+      resultado.strengths,
+      5,
+    );
+
+    const improvementPriorities =
+      normalizarLista(
+        resultado.improvement_priorities,
+        5,
+      );
+
+    const criteriaFeedback =
+      normalizarFeedbackPorCriterio(
+        resultado.criteria_feedback,
+      );
+
+    if (criteriaFeedback.length === 0) {
+      throw new Error(
+        "A OpenAI não retornou o feedback por critério.",
       );
     }
-
-    if (missingPoints.length > 0) {
-      feedbackParts.push(
-        `Pontos ausentes:\n${missingPoints
-          .map((item) => `• ${item}`)
-          .join("\n")}`,
-      );
-    }
-
-    if (incorrectPoints.length > 0) {
-      feedbackParts.push(
-        `Pontos incorretos:\n${incorrectPoints
-          .map((item) => `• ${item}`)
-          .join("\n")}`,
-      );
-    }
-
-    const contentFeedback = feedbackParts.join("\n\n");
 
     const correctionPayload = {
       content_score: contentScore,
-      content_maximum_score: maximumScore,
-      content_feedback: contentFeedback,
+      content_maximum_score:
+        maximumScore,
+
+      /*
+       * A explicação completa aparece somente
+       * em content_feedback.
+       */
+      content_feedback:
+        contentFeedback,
+
+      /*
+       * Evita repetir a mesma explicação no topo
+       * e novamente na seção de conteúdo.
+       */
+      summary_feedback: null,
+
+      strengths:
+        listaComoTexto(strengths),
+
+      /*
+       * Reutilizamos weaknesses como prioridades
+       * de melhoria para não alterar o banco agora.
+       */
+      weaknesses:
+        listaComoTexto(
+          improvementPriorities,
+        ),
+
+      /*
+       * Nova seção de avaliação individual
+       * por critério do enunciado.
+       */
+      criteria_feedback:
+        criteriaFeedback,
+
+      /*
+       * Não haverá uma segunda lista redundante.
+       */
+      improvement_suggestions: null,
+
       validation_status: "adequate",
       validation_feedback:
-        validacao.feedback ?? "Questão aprovada no Nível 1.",
-      validation_confidence: Number(validacao.confidence ?? 0),
+        validacao.feedback ??
+        "Questão aprovada no Nível 1.",
+      validation_confidence: Number(
+        validacao.confidence ?? 0,
+      ),
+
       total_score: contentScore,
-      summary_feedback:
-        texto(resultado.overall_feedback) || "Correção de conteúdo concluída.",
-      strengths: listaComoTexto(strengths),
-      weaknesses: listaComoTexto(weaknesses),
-      improvement_suggestions: listaComoTexto(improvementSuggestions),
       calculation_details: null,
+      model_used: MODEL_NAME,
+      prompt_version: PROMPT_VERSION,
+      processing_time_ms:
+        Date.now() - inicio,
     };
 
     if (correcaoExistente) {
-      correctionId = Number(correcaoExistente.id);
+      correctionId = Number(
+        correcaoExistente.id,
+      );
 
-      const { error: updateError } = await admin
-        .from("corrections")
-        .update(correctionPayload)
-        .eq("id", correctionId);
+      const { error: updateError } =
+        await admin
+          .from("corrections")
+          .update(correctionPayload)
+          .eq("id", correctionId);
 
       if (updateError) {
         throw new Error(
@@ -544,7 +846,10 @@ export async function POST(request: NextRequest) {
         );
       }
     } else {
-      const { data: novaCorrecao, error: insertCorrectionError } = await admin
+      const {
+        data: novaCorrecao,
+        error: insertCorrectionError,
+      } = await admin
         .from("corrections")
         .insert({
           answer_id: answerId,
@@ -553,7 +858,10 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
 
-      if (insertCorrectionError || !novaCorrecao) {
+      if (
+        insertCorrectionError ||
+        !novaCorrecao
+      ) {
         throw new Error(
           `Não foi possível criar a correção: ${
             insertCorrectionError?.message ??
@@ -562,12 +870,16 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      correctionId = Number(novaCorrecao.id);
+      correctionId = Number(
+        novaCorrecao.id,
+      );
     }
 
     await admin
       .from("user_answers")
-      .update({ status: "processing" })
+      .update({
+        status: "processing",
+      })
       .eq("id", answerId);
 
     await registrarExecucao({
@@ -576,18 +888,24 @@ export async function POST(request: NextRequest) {
       correctionId,
       status: "completed",
       inputData: {
-        question_id: resposta.question_id,
+        question_id:
+          resposta.question_id,
         maximum_score: maximumScore,
-        correction_mode: "direct_reference_answer",
+        correction_mode:
+          "single_complete_feedback_with_criteria",
       },
       outputData: {
         content_score: contentScore,
-        content_maximum_score: maximumScore,
-        covered_points: coveredPoints,
-        missing_points: missingPoints,
-        incorrect_points: incorrectPoints,
+        content_maximum_score:
+          maximumScore,
+        strengths,
+        improvement_priorities:
+          improvementPriorities,
+        criteria_feedback:
+          criteriaFeedback,
       },
-      processingTimeMs: Date.now() - inicio,
+      processingTimeMs:
+        Date.now() - inicio,
       inputTokens,
       outputTokens,
     });
@@ -597,14 +915,15 @@ export async function POST(request: NextRequest) {
       cached: false,
       correction_id: correctionId,
       content_score: contentScore,
-      content_maximum_score: maximumScore,
-      content_feedback: contentFeedback,
-      covered_points: coveredPoints,
-      missing_points: missingPoints,
-      incorrect_points: incorrectPoints,
+      content_maximum_score:
+        maximumScore,
+      content_feedback:
+        contentFeedback,
       strengths,
-      weaknesses,
-      improvement_suggestions: improvementSuggestions,
+      improvement_priorities:
+        improvementPriorities,
+      criteria_feedback:
+        criteriaFeedback,
     });
   } catch (error) {
     const message =
@@ -612,16 +931,21 @@ export async function POST(request: NextRequest) {
         ? error.message
         : "Erro inesperado durante a correção de conteúdo.";
 
-    if (answerId !== null && answerId > 0) {
+    if (
+      answerId !== null &&
+      answerId > 0
+    ) {
       try {
-        const admin = createAdminClient();
+        const admin =
+          createAdminClient();
 
         await registrarExecucao({
           admin,
           answerId,
           correctionId,
           status: "error",
-          processingTimeMs: Date.now() - inicio,
+          processingTimeMs:
+            Date.now() - inicio,
           errorMessage: message,
         });
       } catch {
@@ -629,6 +953,23 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return responderErro(message, 500);
+    if (
+      reservaAtiva &&
+      userId &&
+      periodoReservado &&
+      answerId !== null
+    ) {
+      await devolverCorrecaoMensal(
+        userId,
+        periodoReservado,
+        answerId,
+        message,
+      );
+    }
+
+    return responderErro(
+      message,
+      500,
+    );
   }
 }

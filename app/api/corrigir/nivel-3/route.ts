@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  buscarLimitesCorrecaoDoUsuario,
+  devolverCorrecaoMensal,
+  reservarCorrecaoMensal,
+} from "@/lib/correction/usage";
+
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -303,6 +309,9 @@ export async function POST(request: NextRequest) {
 
   let answerId: number | null = null;
   let correctionId: number | null = null;
+  let userId = "";
+  let reservaAtiva = false;
+  let periodoReservado = "";
 
   try {
     const supabase = await createClient();
@@ -315,6 +324,8 @@ export async function POST(request: NextRequest) {
     if (userError || !user) {
       return responderErro("Usuário não autenticado.", 401);
     }
+
+    userId = user.id;
 
     let body: CorpoRequisicao;
 
@@ -449,6 +460,29 @@ export async function POST(request: NextRequest) {
         errors: existingErrors ?? [],
       });
     }
+
+    const limites =
+      await buscarLimitesCorrecaoDoUsuario(
+        user.id,
+      );
+
+    const reserva =
+      await reservarCorrecaoMensal(
+        user.id,
+        limites.monthlyCorrections,
+        answerId,
+      );
+
+    if (!reserva.allowed) {
+      return responderErro(
+        `Você atingiu o limite mensal de ${limites.monthlyCorrections} correções do plano ${limites.displayName}.`,
+        429,
+      );
+    }
+
+    reservaAtiva =
+      reserva.reservationStatus === "reserved";
+    periodoReservado = reserva.periodStart;
 
     await registrarExecucao({
       admin,
@@ -605,6 +639,20 @@ export async function POST(request: NextRequest) {
       } catch {
         // Mantém o erro principal.
       }
+    }
+
+    if (
+      reservaAtiva &&
+      userId &&
+      periodoReservado &&
+      answerId !== null
+    ) {
+      await devolverCorrecaoMensal(
+        userId,
+        periodoReservado,
+        answerId,
+        message,
+      );
     }
 
     return responderErro(message, 500);

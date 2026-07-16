@@ -1,15 +1,60 @@
 "use client";
 
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  BookOpen,
+  CheckCircle2,
+  Clock3,
+  FileCheck2,
+  FileText,
+  Languages,
+  Lightbulb,
+  LoaderCircle,
+  Play,
+  RotateCw,
+  ShieldCheck,
+  Sparkles,
+  Target,
+  Trophy,
+} from "lucide-react";
 
-import { createClient } from "@/lib/supabase/client";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
 
 type RespostaBanco = {
   id: number;
   user_id: string;
   question_id: number;
+  selected_question: number | null;
   answer_text: string;
   status: string;
   created_at: string;
@@ -20,10 +65,17 @@ type QuestaoBanco = {
   id: number;
   title: string | null;
   statement: string | null;
+  reference_answer: string | null;
   examining_board: string | null;
   exam_name: string | null;
   exam_year: number | null;
   maximum_score: number | null;
+};
+
+type CorrecaoCriteriaFeedback = {
+  criterion: string;
+  status: "atendeu" | "atendeu_parcialmente" | "nao_atendeu" | string;
+  evaluation: string;
 };
 
 type CorrecaoBanco = {
@@ -41,6 +93,7 @@ type CorrecaoBanco = {
   content_score: number | null;
   content_maximum_score: number | null;
   content_feedback: string | null;
+  criteria_feedback?: CorrecaoCriteriaFeedback[] | null;
   language_error_count: number | null;
   effective_line_count: number | null;
   language_discount: number | null;
@@ -61,6 +114,26 @@ type ErroLinguagemBanco = {
   explanation: string;
   suggested_correction: string | null;
   occurrence_order: number;
+};
+
+type RespostaResultadoAPI = {
+  success: boolean;
+  answer?: RespostaBanco;
+  question?: QuestaoBanco;
+  correction?: CorrecaoBanco | null;
+  language_errors?: ErroLinguagemBanco[];
+  error?: string;
+};
+
+type LimitesCorrecao = {
+  success: boolean;
+  plan?: "free" | "essential" | "pro";
+  plan_name?: string;
+  monthly_limit?: number;
+  used_this_month?: number;
+  remaining_this_month?: number;
+  period_start?: string;
+  error?: string;
 };
 
 type CalculoDetalhes = {
@@ -86,37 +159,16 @@ function formatarData(data: string | null) {
   }).format(new Date(data));
 }
 
-function formatarNumero(valor: number | null | undefined, casas = 2) {
+function formatarNumero(
+  valor: number | null | undefined,
+  casas = 2,
+) {
   return Number(valor ?? 0).toFixed(casas);
 }
 
-function traduzirStatus(status: string) {
-  const traducoes: Record<string, string> = {
-    draft: "Rascunho",
-    submitted: "Aguardando correção",
-    processing: "Correção em andamento",
-    correcting: "Correção em andamento",
-    corrected: "Corrigida",
-    failed: "Falha na correção",
-  };
-
-  return traducoes[status] ?? status;
-}
-
-function classeStatus(status: string) {
-  const classes: Record<string, string> = {
-    draft: "bg-slate-100 text-slate-700",
-    submitted: "bg-amber-50 text-amber-800",
-    processing: "bg-blue-50 text-blue-700",
-    correcting: "bg-blue-50 text-blue-700",
-    corrected: "bg-green-50 text-green-700",
-    failed: "bg-red-50 text-red-700",
-  };
-
-  return classes[status] ?? "bg-slate-100 text-slate-700";
-}
-
-function normalizarCalculo(value: unknown): CalculoDetalhes {
+function normalizarCalculo(
+  value: unknown,
+): CalculoDetalhes {
   if (
     typeof value !== "object" ||
     value === null ||
@@ -128,48 +180,86 @@ function normalizarCalculo(value: unknown): CalculoDetalhes {
   return value as CalculoDetalhes;
 }
 
-function SecaoTexto(props: {
-  titulo: string;
-  texto: string | null;
-  vazio?: string;
-}) {
-  if (!props.texto) {
-    return null;
+function textoParaLista(
+  value: string | null | undefined,
+) {
+  if (!value?.trim()) {
+    return [];
   }
 
-  return (
-    <section className="rounded-2xl bg-white p-8 shadow-sm">
-      <h2 className="text-2xl font-bold text-slate-900">
-        {props.titulo}
-      </h2>
-
-      <p className="mt-5 whitespace-pre-wrap leading-8 text-slate-700">
-        {props.texto || props.vazio}
-      </p>
-    </section>
-  );
+  return value
+    .split("\n")
+    .map((item) =>
+      item
+        .replace(/^[•\-–—]\s*/, "")
+        .trim(),
+    )
+    .filter(Boolean);
 }
 
+function traduzirStatus(status: string) {
+  const traducoes: Record<string, string> = {
+    draft: "Rascunho",
+    submitted: "Aguardando correção",
+    processing: "Correção em andamento",
+    correcting: "Correção em andamento",
+    corrected: "Correção concluída",
+    failed: "Falha na correção",
+  };
+
+  return traducoes[status] ?? status;
+}
+
+const MENSAGENS_PROCESSAMENTO = [
+  "Analisando sua resposta...",
+  "Comparando com o gabarito oficial...",
+  "Estamos avançando na correção...",
+  "Organizando seu feedback...",
+  "Está quase lá...",
+  "Finalizando esta etapa...",
+] as const;
+
 export default function RespostaPage() {
-  const params = useParams();
+  const params = useParams<{ id: string }>();
   const router = useRouter();
+
   const respostaId = Number(params.id);
 
-  const [resposta, setResposta] = useState<RespostaBanco | null>(null);
-  const [questao, setQuestao] = useState<QuestaoBanco | null>(null);
-  const [correcao, setCorrecao] = useState<CorrecaoBanco | null>(null);
-  const [errosLinguagem, setErrosLinguagem] = useState<
-    ErroLinguagemBanco[]
-  >([]);
-  const [carregando, setCarregando] = useState(true);
-  const [corrigindo, setCorrigindo] = useState(false);
-  const [corrigindoLinguagem, setCorrigindoLinguagem] = useState(false);
-  const [calculandoNota, setCalculandoNota] = useState(false);
+  const [resposta, setResposta] =
+    useState<RespostaBanco | null>(null);
+
+  const [questao, setQuestao] =
+    useState<QuestaoBanco | null>(null);
+
+  const [correcao, setCorrecao] =
+    useState<CorrecaoBanco | null>(null);
+
+  const [errosLinguagem, setErrosLinguagem] =
+    useState<ErroLinguagemBanco[]>([]);
+
+  const [carregando, setCarregando] =
+    useState(true);
+
+  const [executandoNivel2, setExecutandoNivel2] =
+    useState(false);
+
+  const [executandoNivel3, setExecutandoNivel3] =
+    useState(false);
+
+  const [executandoNivel4, setExecutandoNivel4] =
+    useState(false);
+
   const [mensagem, setMensagem] = useState("");
   const [erro, setErro] = useState("");
 
+  const [limitesCorrecao, setLimitesCorrecao] =
+    useState<LimitesCorrecao | null>(null);
+
   const carregarDados = useCallback(async () => {
-    if (!Number.isInteger(respostaId) || respostaId <= 0) {
+    if (
+      !Number.isInteger(respostaId) ||
+      respostaId <= 0
+    ) {
       setErro("Identificador da resposta inválido.");
       setCarregando(false);
       return;
@@ -178,149 +268,47 @@ export default function RespostaPage() {
     try {
       setErro("");
 
-      const supabase = createClient();
+      const response = await fetch(
+        `/api/respostas/${respostaId}/resultado`,
+        {
+          method: "GET",
+          cache: "no-store",
+        },
+      );
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+      const resultado =
+        (await response.json()) as RespostaResultadoAPI;
 
-      if (userError || !user) {
-        router.push("/login");
+      if (
+        response.status === 401
+      ) {
+        router.replace("/login");
         return;
       }
 
-      const { data: respostaData, error: respostaError } = await supabase
-        .from("user_answers")
-        .select(`
-          id,
-          user_id,
-          question_id,
-          answer_text,
-          status,
-          created_at,
-          submitted_at
-        `)
-        .eq("id", respostaId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (respostaError) {
+      if (
+        !response.ok ||
+        resultado.success !== true ||
+        !resultado.answer ||
+        !resultado.question
+      ) {
         throw new Error(
-          `Erro ao buscar resposta: ${respostaError.message}`,
+          resultado.error ??
+            "Não foi possível carregar o resultado.",
         );
       }
 
-      if (!respostaData) {
-        throw new Error("Resposta não encontrada.");
-      }
-
-      const respostaCarregada = respostaData as RespostaBanco;
-      setResposta(respostaCarregada);
-
-      const { data: questaoData, error: questaoError } = await supabase
-        .from("questions")
-        .select(`
-          id,
-          title,
-          statement,
-          examining_board,
-          exam_name,
-          exam_year,
-          maximum_score
-        `)
-        .eq("id", respostaCarregada.question_id)
-        .maybeSingle();
-
-      if (questaoError) {
-        throw new Error(
-          `Erro ao buscar questão: ${questaoError.message}`,
-        );
-      }
-
-      if (!questaoData) {
-        throw new Error("Questão vinculada não encontrada.");
-      }
-
-      setQuestao(questaoData as QuestaoBanco);
-
-      const { data: correcaoData, error: correcaoError } = await supabase
-        .from("corrections")
-        .select(`
-          id,
-          answer_id,
-          total_score,
-          summary_feedback,
-          strengths,
-          weaknesses,
-          improvement_suggestions,
-          improved_answer,
-          validation_status,
-          validation_feedback,
-          validation_confidence,
-          content_score,
-          content_maximum_score,
-          content_feedback,
-          language_error_count,
-          effective_line_count,
-          language_discount,
-          language_feedback,
-          calculation_details,
-          model_used,
-          prompt_version,
-          processing_time_ms,
-          created_at
-        `)
-        .eq("answer_id", respostaId)
-        .maybeSingle();
-
-      if (correcaoError) {
-        throw new Error(
-          `Erro ao buscar correção: ${correcaoError.message}`,
-        );
-      }
-
-      if (!correcaoData) {
-        setCorrecao(null);
-        setErrosLinguagem([]);
-        return;
-      }
-
-      const correcaoCarregada = correcaoData as CorrecaoBanco;
-      setCorrecao(correcaoCarregada);
-
-      const {
-        data: errosLinguagemData,
-        error: errosLinguagemError,
-      } = await supabase
-        .from("language_errors")
-        .select(`
-          id,
-          correction_id,
-          criterion_code,
-          criterion_name,
-          excerpt,
-          explanation,
-          suggested_correction,
-          occurrence_order
-        `)
-        .eq("correction_id", correcaoCarregada.id)
-        .order("occurrence_order", { ascending: true });
-
-      if (errosLinguagemError) {
-        throw new Error(
-          `Erro ao buscar erros linguísticos: ${errosLinguagemError.message}`,
-        );
-      }
-
+      setResposta(resultado.answer);
+      setQuestao(resultado.question);
+      setCorrecao(resultado.correction ?? null);
       setErrosLinguagem(
-        (errosLinguagemData ?? []) as ErroLinguagemBanco[],
+        resultado.language_errors ?? [],
       );
     } catch (errorCarregamento) {
       setErro(
         errorCarregamento instanceof Error
           ? errorCarregamento.message
-          : "Erro desconhecido ao carregar a resposta.",
+          : "Erro desconhecido ao carregar o resultado.",
       );
     } finally {
       setCarregando(false);
@@ -328,35 +316,118 @@ export default function RespostaPage() {
   }, [respostaId, router]);
 
   useEffect(() => {
-    carregarDados();
+    void carregarDados();
   }, [carregarDados]);
 
+  useEffect(() => {
+    async function carregarLimites() {
+      try {
+        const response = await fetch(
+          "/api/correcoes/limites",
+          {
+            method: "GET",
+            cache: "no-store",
+          },
+        );
+
+        const resultado =
+          (await response.json()) as LimitesCorrecao;
+
+        if (
+          response.ok &&
+          resultado.success === true
+        ) {
+          setLimitesCorrecao(resultado);
+        }
+      } catch {
+        /*
+         * O resultado da correção continua acessível mesmo
+         * se a consulta de limites falhar.
+         */
+      }
+    }
+
+    void carregarLimites();
+  }, []);
+
   const calculo = useMemo(
-    () => normalizarCalculo(correcao?.calculation_details),
+    () =>
+      normalizarCalculo(
+        correcao?.calculation_details,
+      ),
     [correcao],
   );
 
-  const percentualFinal = useMemo(() => {
-    const notaMaxima = Number(
-      correcao?.content_maximum_score ?? questao?.maximum_score ?? 0,
-    );
+  const pontosFortes = useMemo(
+    () => textoParaLista(correcao?.strengths),
+    [correcao?.strengths],
+  );
 
-    if (!correcao || notaMaxima <= 0) {
-      return 0;
-    }
+  const prioridadesMelhoria = useMemo(
+    () => textoParaLista(correcao?.weaknesses),
+    [correcao?.weaknesses],
+  );
 
-    return Math.min(
-      Math.max((Number(correcao.total_score ?? 0) / notaMaxima) * 100, 0),
-      100,
-    );
-  }, [correcao, questao]);
+  /*
+   * Cada etapa só é considerada concluída quando os campos
+   * específicos dela realmente foram preenchidos.
+   *
+   * Não verificamos apenas language_error_count porque essa
+   * coluna pode ter valor padrão 0 antes da análise linguística.
+   */
+  const nivel2Concluido = Boolean(
+    correcao?.content_feedback?.trim() &&
+      correcao.content_score !== null &&
+      correcao.content_score !== undefined,
+  );
+
+  const nivel3Concluido = Boolean(
+    correcao?.language_feedback?.trim() &&
+      correcao.language_error_count !== null &&
+      correcao.language_error_count !== undefined &&
+      correcao.language_discount !== null &&
+      correcao.language_discount !== undefined,
+  );
+
+  const nivel4Concluido = Boolean(
+    correcao?.total_score !== null &&
+      correcao?.total_score !== undefined &&
+      typeof calculo.final_score === "number" &&
+      Number.isFinite(calculo.final_score),
+  );
+
+  const numeroQuestaoSelecionada =
+    resposta?.selected_question ?? 1;
+
+  const notaMaxima = Number(
+    correcao?.content_maximum_score ??
+      questao?.maximum_score ??
+      0,
+  );
+
+  const notaExibida = Number(
+    nivel4Concluido
+      ? correcao?.total_score ??
+          calculo.final_score ??
+          0
+      : correcao?.content_score ?? 0,
+  );
+
+  const percentual =
+    notaMaxima > 0
+      ? Math.min(
+          Math.max(
+            (notaExibida / notaMaxima) * 100,
+            0,
+          ),
+          100,
+        )
+      : 0;
 
   async function executarEtapa(paramsExecucao: {
     endpoint: string;
     iniciar: (value: boolean) => void;
-    mensagemNova: string;
-    mensagemCache: string;
-    erroPadrao: string;
+    mensagemSucesso: string;
   }) {
     if (!resposta) {
       return;
@@ -367,455 +438,864 @@ export default function RespostaPage() {
       setMensagem("");
       setErro("");
 
-      const response = await fetch(paramsExecucao.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const response = await fetch(
+        paramsExecucao.endpoint,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            answer_id: resposta.id,
+          }),
         },
-        body: JSON.stringify({
-          answer_id: resposta.id,
-        }),
-      });
+      );
 
       const resultado = await response.json();
 
       if (!response.ok) {
-        throw new Error(resultado.error ?? paramsExecucao.erroPadrao);
+        throw new Error(
+          resultado.error ??
+            "Não foi possível executar esta etapa.",
+        );
       }
 
       setMensagem(
         resultado.cached
-          ? paramsExecucao.mensagemCache
-          : paramsExecucao.mensagemNova,
+          ? "O resultado já existia e foi carregado."
+          : paramsExecucao.mensagemSucesso,
       );
 
-      setCarregando(true);
       await carregarDados();
-    } catch (erroExecucao) {
+    } catch (errorExecucao) {
       setErro(
-        erroExecucao instanceof Error
-          ? erroExecucao.message
-          : paramsExecucao.erroPadrao,
+        errorExecucao instanceof Error
+          ? errorExecucao.message
+          : "Erro ao executar a correção.",
       );
-
-      setCarregando(true);
-      await carregarDados();
     } finally {
       paramsExecucao.iniciar(false);
     }
   }
 
   if (carregando) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-slate-600">Carregando resposta...</p>
-      </main>
-    );
-  }
-
-  if (erro && !resposta) {
-    return (
-      <main className="min-h-screen bg-slate-50 px-6 py-12">
-        <section className="mx-auto max-w-4xl rounded-2xl bg-white p-8 shadow-sm">
-          <h1 className="text-2xl font-bold text-slate-900">
-            Não foi possível abrir a resposta
-          </h1>
-
-          <p className="mt-4 rounded-lg bg-red-50 p-4 text-red-700">
-            {erro}
-          </p>
-
-          <Link
-            href="/historico"
-            className="mt-6 inline-block rounded-lg bg-blue-600 px-5 py-3 font-semibold text-white"
-          >
-            Voltar ao histórico
-          </Link>
-        </section>
-      </main>
-    );
+    return <ResultadoSkeleton />;
   }
 
   if (!resposta || !questao) {
-    return null;
+    return (
+      <div className="mx-auto max-w-3xl space-y-6">
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>
+            Não foi possível abrir a resposta
+          </AlertTitle>
+          <AlertDescription>
+            {erro || "Resposta não encontrada."}
+          </AlertDescription>
+        </Alert>
+
+        <Link
+          href="/historico"
+          className="inline-flex h-9 items-center gap-2 rounded-md border bg-background px-4 text-sm font-medium hover:bg-accent"
+        >
+          <ArrowLeft className="size-4" />
+          Voltar ao histórico
+        </Link>
+      </div>
+    );
   }
 
-  const podeCorrigir =
-    resposta.status === "submitted" || resposta.status === "failed";
-
-  const nivel2Concluido = Boolean(
-    correcao?.content_feedback && correcao.content_score !== null,
-  );
-
-  const nivel3Concluido =
-    correcao?.language_error_count !== null &&
-    correcao?.language_error_count !== undefined;
-
-  const nivel4Concluido = Boolean(correcao?.calculation_details);
-
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-12">
-      <section className="mx-auto max-w-6xl">
-        <nav className="flex flex-wrap gap-5">
-          <Link
-            href="/dashboard"
-            className="text-sm font-semibold text-blue-600"
-          >
-            Voltar ao dashboard
-          </Link>
+    <div className="space-y-6">
+      <header className="space-y-4 border-b pb-6">
+        <Link
+          href="/questoes"
+          className="-ml-2 inline-flex h-8 items-center gap-2 rounded-md px-3 text-sm font-medium hover:bg-accent"
+        >
+          <ArrowLeft className="size-4" />
+          Voltar para as questões
+        </Link>
 
-          <Link
-            href="/historico"
-            className="text-sm font-semibold text-blue-600"
-          >
-            Ver histórico
-          </Link>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {questao.examining_board && (
+                <Badge variant="secondary">
+                  {questao.examining_board}
+                </Badge>
+              )}
 
-          <Link
-            href="/questoes"
-            className="text-sm font-semibold text-blue-600"
-          >
-            Ver questões
-          </Link>
-        </nav>
+              {questao.exam_year && (
+                <Badge variant="outline">
+                  {questao.exam_year}
+                </Badge>
+              )}
 
-        <header className="mt-6 rounded-2xl bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-6">
-            <div className="max-w-3xl">
-              <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-                Resposta discursiva
-              </p>
-
-              <h1 className="mt-2 text-3xl font-bold text-slate-900">
-                {questao.title ||
-                  questao.exam_name ||
-                  "Questão discursiva"}
-              </h1>
-
-              <div className="mt-4 flex flex-wrap gap-2 text-sm text-slate-500">
-                {questao.examining_board && (
-                  <span>{questao.examining_board}</span>
-                )}
-                {questao.exam_year && <span>• {questao.exam_year}</span>}
-                {questao.exam_name && <span>• {questao.exam_name}</span>}
-              </div>
+              <Badge variant="outline">
+                {traduzirStatus(resposta.status)}
+              </Badge>
+              <Badge variant="secondary">
+  Questão {numeroQuestaoSelecionada}
+</Badge>
             </div>
 
-            <span
-              className={`rounded-full px-4 py-2 text-sm font-semibold ${classeStatus(
-                resposta.status,
-              )}`}
-            >
-              {traduzirStatus(resposta.status)}
-            </span>
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+  {questao.title ||
+    questao.exam_name ||
+    "Resultado da correção"}
+  <span className="text-muted-foreground">
+    {" — "}Questão {numeroQuestaoSelecionada}
+  </span>
+</h1>
+
+              {questao.exam_name && (
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {questao.exam_name}
+                </p>
+              )}
+            </div>
           </div>
-        </header>
 
-        {mensagem && (
-          <p className="mt-6 rounded-lg bg-green-50 p-4 text-green-700">
-            {mensagem}
-          </p>
-        )}
-
-        {erro && (
-          <p className="mt-6 rounded-lg bg-red-50 p-4 text-red-700">
-            {erro}
-          </p>
-        )}
-
-        <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-          <h2 className="text-2xl font-bold text-slate-900">Enunciado</h2>
-
-          <p className="mt-5 whitespace-pre-wrap leading-8 text-slate-700">
-            {questao.statement}
-          </p>
-        </section>
-
-        <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <h2 className="text-2xl font-bold text-slate-900">
-              Sua resposta
-            </h2>
-
-            <span className="text-sm text-slate-500">
+          <div className="flex flex-col items-start gap-3 lg:items-end">
+            <p className="text-sm text-muted-foreground">
               Enviada em{" "}
               {formatarData(
-                resposta.submitted_at ?? resposta.created_at,
+                resposta.submitted_at ??
+                  resposta.created_at,
               )}
-            </span>
-          </div>
-
-          <div className="mt-5 rounded-xl bg-slate-50 p-6">
-            <p className="whitespace-pre-wrap leading-8 text-slate-700">
-              {resposta.answer_text}
             </p>
+
+            {limitesCorrecao?.plan === "free" && (
+              <Link
+                href="/#planos"
+                className="inline-flex h-9 items-center justify-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Ver planos
+              </Link>
+            )}
+
+            {limitesCorrecao?.plan === "essential" && (
+              <Link
+                href="/#planos"
+                className="inline-flex h-9 items-center justify-center rounded-md border border-input bg-background px-3 text-sm font-medium shadow-xs transition-colors hover:bg-accent hover:text-accent-foreground"
+              >
+                Fazer upgrade
+              </Link>
+            )}
           </div>
-        </section>
+        </div>
+      </header>
 
-        <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-          <h2 className="text-2xl font-bold text-slate-900">
-            Etapas da correção
-          </h2>
+      {mensagem && (
+        <Alert className="border-emerald-200 bg-emerald-50">
+          <CheckCircle2 className="size-4 text-emerald-700" />
+          <AlertTitle>Etapa concluída</AlertTitle>
+          <AlertDescription>
+            {mensagem}
+          </AlertDescription>
+        </Alert>
+      )}
 
-          <p className="mt-3 leading-7 text-slate-600">
-            O conteúdo é avaliado diretamente pelo gabarito oficial. Não há
-            critérios artificiais ou notas por critério.
-          </p>
+      {erro && (
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Ocorreu um problema</AlertTitle>
+          <AlertDescription>{erro}</AlertDescription>
+        </Alert>
+      )}
 
-          <div className="mt-6 flex flex-wrap gap-4">
-            <button
-              type="button"
+      {!nivel4Concluido && (
+        <Card>
+          <CardHeader className="border-b">
+            <CardTitle className="text-base">
+              Etapas da correção
+            </CardTitle>
+
+            <CardDescription>
+              Execute as análises na ordem indicada.
+            </CardDescription>
+          </CardHeader>
+
+          <CardContent className="grid gap-4 pt-6 md:grid-cols-3">
+            <EtapaCorrecao
+              numero="1"
+              titulo="Conteúdo"
+              descricao="Compara a resposta com o gabarito oficial."
+              concluida={nivel2Concluido}
+              carregando={executandoNivel2}
+              desabilitada={false}
               onClick={() =>
                 executarEtapa({
                   endpoint: "/api/corrigir/nivel-2",
-                  iniciar: setCorrigindo,
-                  mensagemNova: "Nível 2 concluído com sucesso.",
-                  mensagemCache:
-                    "O Nível 2 já havia sido executado. O resultado foi carregado.",
-                  erroPadrao:
-                    "Não foi possível realizar a correção de conteúdo.",
+                  iniciar: setExecutandoNivel2,
+                  mensagemSucesso:
+                    "A correção de conteúdo foi concluída.",
                 })
               }
-              disabled={corrigindo || (!podeCorrigir && !correcao)}
-              className="rounded-lg bg-blue-600 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {corrigindo
-                ? "Corrigindo conteúdo..."
-                : nivel2Concluido
-                  ? "Recarregar Nível 2"
-                  : "Executar Nível 2"}
-            </button>
+            />
 
-            <button
-              type="button"
+            <EtapaCorrecao
+              numero="2"
+              titulo="Linguagem"
+              descricao="Identifica ocorrências linguísticas."
+              concluida={nivel3Concluido}
+              carregando={executandoNivel3}
+              desabilitada={!nivel2Concluido}
               onClick={() =>
                 executarEtapa({
                   endpoint: "/api/corrigir/nivel-3",
-                  iniciar: setCorrigindoLinguagem,
-                  mensagemNova: "Nível 3 concluído com sucesso.",
-                  mensagemCache:
-                    "O Nível 3 já havia sido executado. O resultado foi carregado.",
-                  erroPadrao:
-                    "Não foi possível realizar a análise linguística.",
+                  iniciar: setExecutandoNivel3,
+                  mensagemSucesso:
+                    "A análise linguística foi concluída.",
                 })
               }
-              disabled={corrigindoLinguagem || !nivel2Concluido}
-              className="rounded-lg bg-violet-600 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {corrigindoLinguagem
-                ? "Analisando linguagem..."
-                : nivel3Concluido
-                  ? "Recarregar Nível 3"
-                  : "Executar Nível 3"}
-            </button>
+            />
 
-            <button
-              type="button"
+            <EtapaCorrecao
+              numero="3"
+              titulo="Nota final"
+              descricao="Aplica o cálculo determinístico."
+              concluida={nivel4Concluido}
+              carregando={executandoNivel4}
+              desabilitada={!nivel3Concluido}
               onClick={() =>
                 executarEtapa({
                   endpoint: "/api/corrigir/nivel-4",
-                  iniciar: setCalculandoNota,
-                  mensagemNova:
-                    "Nível 4 concluído. A nota final foi calculada.",
-                  mensagemCache:
-                    "O Nível 4 já havia sido executado. O resultado foi carregado.",
-                  erroPadrao: "Não foi possível calcular a nota final.",
+                  iniciar: setExecutandoNivel4,
+                  mensagemSucesso:
+                    "A nota final foi calculada.",
                 })
               }
-              disabled={calculandoNota || !nivel3Concluido}
-              className="rounded-lg bg-emerald-600 px-6 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {calculandoNota
-                ? "Calculando nota..."
-                : nivel4Concluido
-                  ? "Recarregar Nível 4"
-                  : "Executar Nível 4"}
-            </button>
-          </div>
-        </section>
+            />
+          </CardContent>
+        </Card>
+      )}
 
-        {correcao && (
-          <>
-            <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-              <div className="flex flex-wrap items-start justify-between gap-8">
-                <div className="max-w-3xl">
-                  <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-                    {nivel4Concluido ? "Resultado final" : "Resultado parcial"}
-                  </p>
-
-                  <h2 className="mt-2 text-3xl font-bold text-slate-900">
+      {nivel2Concluido && correcao ? (
+        <>
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <div className="grid lg:grid-cols-[1fr_280px]">
+                <div className="p-6 md:p-8">
+                  <div className="flex items-center gap-2 text-sm font-medium text-primary">
+                    <FileCheck2 className="size-4" />
                     {nivel4Concluido
-                      ? "Correção concluída"
-                      : "Correção em andamento"}
+                      ? "Resultado final"
+                      : "Resultado parcial"}
+                  </div>
+
+                  <h2 className="mt-3 text-2xl font-semibold">
+                    Avaliação da resposta
                   </h2>
 
-                  <p className="mt-3 text-sm text-slate-500">
-                    Registrada em {formatarData(correcao.created_at)}
+                  <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+                    A nota é uma estimativa educacional baseada no
+                    enunciado e no gabarito oficial.
                   </p>
-
-                  {correcao.summary_feedback && (
-                    <p className="mt-6 whitespace-pre-wrap leading-7 text-slate-700">
-                      {correcao.summary_feedback}
-                    </p>
-                  )}
                 </div>
 
-                <div className="rounded-2xl bg-blue-50 px-8 py-6 text-center">
-                  <p className="text-sm font-medium text-blue-700">
-                    {nivel4Concluido ? "Nota final" : "Nota de conteúdo"}
-                  </p>
+                <div className="flex flex-col items-center justify-center border-t bg-muted/30 p-6 text-center lg:border-l lg:border-t-0">
+                  <span className="text-sm text-muted-foreground">
+                    {nivel4Concluido
+                      ? "Nota final"
+                      : "Nota de conteúdo"}
+                  </span>
 
-                  <p className="mt-1 text-5xl font-bold text-blue-800">
-                    {formatarNumero(
-                      nivel4Concluido
-                        ? correcao.total_score
-                        : correcao.content_score,
-                    )}
-                  </p>
+                  <strong className="mt-1 text-5xl font-semibold tracking-tight">
+                    {formatarNumero(notaExibida)}
+                  </strong>
 
-                  <p className="mt-2 text-sm text-blue-700">
-                    de{" "}
-                    {formatarNumero(
-                      correcao.content_maximum_score ??
-                        questao.maximum_score,
-                    )}
-                  </p>
+                  <span className="mt-1 text-sm text-muted-foreground">
+                    de {formatarNumero(notaMaxima)}
+                  </span>
 
-                  {nivel4Concluido && (
-                    <p className="mt-2 font-semibold text-blue-800">
-                      {percentualFinal.toFixed(1)}%
-                    </p>
-                  )}
+                  <Badge
+                    variant="secondary"
+                    className="mt-4"
+                  >
+                    {percentual.toFixed(1)}% de aproveitamento
+                  </Badge>
                 </div>
               </div>
-            </section>
+            </CardContent>
+          </Card>
 
-            <section className="mt-8 grid gap-5 md:grid-cols-3">
-              <article className="rounded-2xl bg-white p-6 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">
-                  Nota de conteúdo
-                </p>
-                <p className="mt-3 text-3xl font-bold text-slate-900">
-                  {formatarNumero(
-                    correcao.content_score ?? calculo.content_score,
-                  )}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  de{" "}
-                  {formatarNumero(
-                    correcao.content_maximum_score ??
-                      calculo.content_maximum_score ??
-                      questao.maximum_score,
-                  )}
-                </p>
-              </article>
+          <Tabs defaultValue="correcao">
+            <TabsList className="h-auto w-full justify-start overflow-x-auto">
+              <TabsTrigger value="correcao">
+                <Sparkles className="size-4" />
+                Correção
+              </TabsTrigger>
 
-              <article className="rounded-2xl bg-white p-6 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">
-                  Erros linguísticos
-                </p>
-                <p className="mt-3 text-3xl font-bold text-slate-900">
-                  {correcao.language_error_count ?? 0}
-                </p>
-              </article>
+              <TabsTrigger value="linguagem">
+                <Languages className="size-4" />
+                Linguagem
+              </TabsTrigger>
 
-              <article className="rounded-2xl bg-white p-6 shadow-sm">
-                <p className="text-sm font-medium text-slate-500">
-                  Desconto linguístico
-                </p>
-                <p className="mt-3 text-3xl font-bold text-slate-900">
-                  {formatarNumero(correcao.language_discount)}
-                </p>
-                <p className="mt-1 text-sm text-slate-500">
-                  0,10 por ocorrência válida
-                </p>
-              </article>
-            </section>
+              <TabsTrigger value="gabarito">
+                <BookOpen className="size-4" />
+                Gabarito
+              </TabsTrigger>
 
-            <div className="mt-8 grid gap-8">
-              <SecaoTexto
-                titulo="Avaliação do conteúdo pelo gabarito"
-                texto={correcao.content_feedback}
-              />
+              <TabsTrigger value="resposta">
+                <FileText className="size-4" />
+                Resposta
+              </TabsTrigger>
+            </TabsList>
 
-              <SecaoTexto
-                titulo="Pontos fortes"
-                texto={correcao.strengths}
-              />
+            <TabsContent
+              value="correcao"
+              className="space-y-6 pt-4"
+            >
+              <Card>
+                <CardHeader className="border-b">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-9 items-center justify-center rounded-md border bg-muted/40">
+                      <Target className="size-4" />
+                    </div>
 
-              <SecaoTexto
-                titulo="Pontos a melhorar"
-                texto={correcao.weaknesses}
-              />
+                    <div>
+                      <CardTitle className="text-base">
+                        Explicação da correção
+                      </CardTitle>
 
-              <SecaoTexto
-                titulo="Sugestões de melhoria"
-                texto={correcao.improvement_suggestions}
-              />
+                      <CardDescription>
+                        Análise única da nota, sem repetir os mesmos
+                        pontos em blocos diferentes.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
 
-              <SecaoTexto
-                titulo="Avaliação linguística"
-                texto={correcao.language_feedback}
-              />
+                <CardContent className="pt-6">
+                  <p className="whitespace-pre-wrap text-[15px] leading-7">
+                    {correcao.content_feedback}
+                  </p>
+                </CardContent>
+              </Card>
+{correcao.criteria_feedback &&
+  correcao.criteria_feedback.length > 0 && (
+    <section className="rounded-2xl border bg-white">
+      <div className="border-b px-6 py-5">
+        <h2 className="font-semibold text-slate-900">
+          Avaliação por critério
+        </h2>
+
+        <p className="text-sm text-slate-500">
+          Análise individual das exigências do enunciado.
+        </p>
+      </div>
+
+      <div className="space-y-4 p-6">
+        {correcao.criteria_feedback.map(
+          (item, index) => (
+            <div
+              key={`${item.criterion}-${index}`}
+              className="rounded-xl border p-4"
+            >
+              <div className="mb-2 flex items-center justify-between gap-4">
+                <h3 className="font-medium text-slate-900">
+                  {item.criterion}
+                </h3>
+
+                <span className="rounded-full border px-3 py-1 text-xs font-medium">
+                  {item.status === "atendeu" &&
+                    "Atendeu"}
+
+                  {item.status ===
+                    "atendeu_parcialmente" &&
+                    "Atendeu parcialmente"}
+
+                  {item.status ===
+                    "nao_atendeu" &&
+                    "Não atendeu"}
+                </span>
+              </div>
+
+              <p className="text-sm leading-6 text-slate-700">
+                {item.evaluation}
+              </p>
             </div>
+          ),
+        )}
+      </div>
+    </section>
+  )}
+              <div className="grid gap-6 lg:grid-cols-2">
+                <ListaFeedback
+                  titulo="Pontos fortes"
+                  descricao="Aspectos mais bem desenvolvidos na resposta."
+                  itens={pontosFortes}
+                  icon={<Trophy className="size-4" />}
+                  vazio="Nenhum ponto forte específico foi registrado."
+                />
 
-            {errosLinguagem.length > 0 && (
-              <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-                <h2 className="text-2xl font-bold text-slate-900">
-                  Ocorrências linguísticas
-                </h2>
+                <ListaFeedback
+                  titulo="Prioridades de melhoria"
+                  descricao="Pontos mais importantes para a próxima resposta."
+                  itens={prioridadesMelhoria}
+                  icon={<Lightbulb className="size-4" />}
+                  vazio="Nenhuma prioridade específica foi registrada."
+                />
+              </div>
 
-                <div className="mt-6 grid gap-4">
-                  {errosLinguagem.map((item) => (
-                    <article
-                      key={item.id}
-                      className="rounded-xl border border-slate-200 p-5"
-                    >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-full bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
-                          {item.criterion_code}
-                        </span>
-                        <strong className="text-slate-900">
-                          {item.criterion_name}
-                        </strong>
-                      </div>
+              {nivel4Concluido && (
+                <Card>
+                  <CardHeader className="border-b">
+                    <CardTitle className="text-base">
+                      Cálculo da nota
+                    </CardTitle>
+                  </CardHeader>
 
-                      <p className="mt-3 rounded-lg bg-slate-50 p-3 text-slate-700">
-                        “{item.excerpt}”
-                      </p>
+                  <CardContent className="grid gap-4 pt-6 sm:grid-cols-3">
+                    <Indicador
+                      titulo="Conteúdo"
+                      valor={`${formatarNumero(
+                        correcao.content_score,
+                      )} / ${formatarNumero(
+                        correcao.content_maximum_score,
+                      )}`}
+                    />
 
-                      <p className="mt-3 leading-7 text-slate-700">
-                        {item.explanation}
-                      </p>
-
-                      {item.suggested_correction && (
-                        <p className="mt-3 text-sm text-emerald-700">
-                          Sugestão: {item.suggested_correction}
-                        </p>
+                    <Indicador
+                      titulo="Erros linguísticos"
+                      valor={String(
+                        correcao.language_error_count ?? 0,
                       )}
-                    </article>
-                  ))}
-                </div>
-              </section>
-            )}
+                    />
 
-            {nivel4Concluido && (
-              <section className="mt-8 rounded-2xl bg-slate-900 p-8 text-white shadow-sm">
-                <h2 className="text-2xl font-bold">Cálculo final</h2>
-                <p className="mt-4 leading-8 text-slate-200">
-                  Nota de conteúdo: {formatarNumero(calculo.content_score)}
-                  <br />
-                  Erros linguísticos: {calculo.language_error_count ?? 0}
-                  <br />
-                  Desconto: {formatarNumero(calculo.language_discount)}
-                  <br />
-                  Nota final: {formatarNumero(calculo.final_score)}
-                </p>
-              </section>
-            )}
+                    <Indicador
+                      titulo="Desconto"
+                      valor={`-${formatarNumero(
+                        correcao.language_discount,
+                      )}`}
+                    />
+                  </CardContent>
+                </Card>
+              )}
+            </TabsContent>
+
+            <TabsContent
+              value="linguagem"
+              className="space-y-6 pt-4"
+            >
+              {!nivel3Concluido ? (
+                <EstadoPendente
+                  titulo="Análise linguística pendente"
+                  descricao="Execute o Nível 3 para identificar as ocorrências linguísticas."
+                />
+              ) : (
+                <>
+                  <Card>
+                    <CardHeader className="border-b">
+                      <CardTitle className="text-base">
+                        Avaliação linguística
+                      </CardTitle>
+
+                      <CardDescription>
+                        {correcao.language_error_count ?? 0} ocorrências
+                        identificadas, com desconto total de{" "}
+                        {formatarNumero(
+                          correcao.language_discount,
+                        )}.
+                      </CardDescription>
+                    </CardHeader>
+
+                    {correcao.language_feedback && (
+                      <CardContent className="pt-6">
+                        <p className="whitespace-pre-wrap text-sm leading-7">
+                          {correcao.language_feedback}
+                        </p>
+                      </CardContent>
+                    )}
+                  </Card>
+
+                  {errosLinguagem.length === 0 ? (
+                    <EstadoPendente
+                      titulo="Nenhuma ocorrência registrada"
+                      descricao="A análise não identificou erros linguísticos válidos."
+                    />
+                  ) : (
+                    <div className="space-y-4">
+                      {errosLinguagem.map(
+                        (item, index) => (
+                          <Card key={item.id}>
+                            <CardHeader className="border-b">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div>
+                                  <CardTitle className="text-base">
+                                    {item.criterion_name}
+                                  </CardTitle>
+
+                                  <CardDescription>
+                                    Ocorrência {index + 1}
+                                  </CardDescription>
+                                </div>
+
+                                <Badge variant="outline">
+                                  {item.criterion_code}
+                                </Badge>
+                              </div>
+                            </CardHeader>
+
+                            <CardContent className="space-y-4 pt-6">
+                              <div>
+                                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                  Trecho
+                                </h3>
+
+                                <blockquote className="mt-2 border-l-2 pl-4 text-sm italic">
+                                  “{item.excerpt}”
+                                </blockquote>
+                              </div>
+
+                              <div>
+                                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                  Explicação
+                                </h3>
+
+                                <p className="mt-2 text-sm leading-6">
+                                  {item.explanation}
+                                </p>
+                              </div>
+
+                              {item.suggested_correction && (
+                                <div>
+                                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                    Forma sugerida
+                                  </h3>
+
+                                  <p className="mt-2 rounded-md border bg-muted/30 p-3 text-sm">
+                                    {item.suggested_correction}
+                                  </p>
+                                </div>
+                              )}
+                            </CardContent>
+                          </Card>
+                        ),
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </TabsContent>
+
+            <TabsContent
+              value="gabarito"
+              className="pt-4"
+            >
+              <Card>
+                <CardHeader className="border-b">
+                  <div className="flex items-start gap-3">
+                    <div className="flex size-9 items-center justify-center rounded-md border bg-muted/40">
+                      <ShieldCheck className="size-4" />
+                    </div>
+
+                    <div>
+                      <CardTitle className="text-base">
+                        Gabarito oficial
+                      </CardTitle>
+
+                      <CardDescription>
+                        Texto original armazenado no banco. Este conteúdo
+                        não foi produzido nem reescrito pela IA.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="pt-6">
+                  {questao.reference_answer ? (
+                    <p className="whitespace-pre-wrap text-[15px] leading-7">
+                      {questao.reference_answer}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      O gabarito será liberado após a conclusão da
+                      correção de conteúdo.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent
+              value="resposta"
+              className="space-y-6 pt-4"
+            >
+              <Card>
+                <CardHeader className="border-b">
+                  <CardTitle className="text-base">
+                    Enunciado
+                  </CardTitle>
+                </CardHeader>
+
+                <CardContent className="pt-6">
+                  <p className="whitespace-pre-wrap text-sm leading-7">
+                    {questao.statement}
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="border-b">
+                  <CardTitle className="text-base">
+                    Resposta enviada
+                  </CardTitle>
+
+                  <CardDescription>
+                    Texto original, sem alterações.
+                  </CardDescription>
+                </CardHeader>
+
+                <CardContent className="pt-6">
+                  <p className="whitespace-pre-wrap text-[15px] leading-7">
+                    {resposta.answer_text}
+                  </p>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </>
+      ) : (
+        <EstadoPendente
+          titulo="A correção ainda não foi iniciada"
+          descricao="Execute o Nível 2 para receber a nota, o feedback e acessar o gabarito oficial."
+        />
+      )}
+    </div>
+  );
+}
+
+type EtapaCorrecaoProps = {
+  numero: string;
+  titulo: string;
+  descricao: string;
+  concluida: boolean;
+  carregando: boolean;
+  desabilitada: boolean;
+  onClick: () => void;
+};
+
+function EtapaCorrecao({
+  numero,
+  titulo,
+  descricao,
+  concluida,
+  carregando,
+  desabilitada,
+  onClick,
+}: EtapaCorrecaoProps) {
+  const [indiceMensagem, setIndiceMensagem] =
+    useState(0);
+
+  useEffect(() => {
+    if (!carregando) {
+      setIndiceMensagem(0);
+      return;
+    }
+
+    const intervalo = window.setInterval(() => {
+      setIndiceMensagem((indiceAtual) =>
+        Math.min(
+          indiceAtual + 1,
+          MENSAGENS_PROCESSAMENTO.length - 1,
+        ),
+      );
+    }, 15000);
+
+    return () => {
+      window.clearInterval(intervalo);
+    };
+  }, [carregando]);
+
+  const mensagemProcessamento =
+    MENSAGENS_PROCESSAMENTO[indiceMensagem];
+
+  return (
+    <div
+      className={
+        carregando
+          ? "rounded-lg border border-primary/30 bg-primary/2 p-4"
+          : "rounded-lg border p-4"
+      }
+      aria-busy={carregando}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-full border bg-muted/40 text-sm font-semibold">
+          {concluida ? (
+            <CheckCircle2 className="size-4 text-emerald-600" />
+          ) : carregando ? (
+            <LoaderCircle className="size-4 animate-spin text-primary" />
+          ) : (
+            numero
+          )}
+        </div>
+
+        <div className="min-w-0">
+          <h3 className="font-medium">{titulo}</h3>
+
+          <p className="mt-1 text-sm leading-5 text-muted-foreground">
+            {carregando
+              ? mensagemProcessamento
+              : descricao}
+          </p>
+        </div>
+      </div>
+
+      <Button
+        type="button"
+        variant={concluida ? "outline" : "default"}
+        size="sm"
+        className="mt-4 w-full"
+        disabled={carregando || desabilitada}
+        onClick={onClick}
+      >
+        {carregando ? (
+          <>
+            <LoaderCircle className="size-4 animate-spin" />
+            {mensagemProcessamento}
+          </>
+        ) : concluida ? (
+          <>
+            <RotateCw className="size-4" />
+            Recarregar
+          </>
+        ) : (
+          <>
+            <Play className="size-4" />
+            Executar
           </>
         )}
-      </section>
-    </main>
+      </Button>
+    </div>
+  );
+}
+
+type ListaFeedbackProps = {
+  titulo: string;
+  descricao: string;
+  itens: string[];
+  icon: React.ReactNode;
+  vazio: string;
+};
+
+function ListaFeedback({
+  titulo,
+  descricao,
+  itens,
+  icon,
+  vazio,
+}: ListaFeedbackProps) {
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <div className="flex items-start gap-3">
+          <div className="flex size-9 items-center justify-center rounded-md border bg-muted/40">
+            {icon}
+          </div>
+
+          <div>
+            <CardTitle className="text-base">
+              {titulo}
+            </CardTitle>
+
+            <CardDescription>
+              {descricao}
+            </CardDescription>
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="pt-6">
+        {itens.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {vazio}
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {itens.map((item, index) => (
+              <li
+                key={`${index}-${item}`}
+                className="flex gap-3 text-sm leading-6"
+              >
+                <CheckCircle2 className="mt-1 size-4 shrink-0 text-primary" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Indicador(props: {
+  titulo: string;
+  valor: string;
+}) {
+  return (
+    <div className="rounded-lg border bg-muted/20 p-4">
+      <p className="text-sm text-muted-foreground">
+        {props.titulo}
+      </p>
+
+      <p className="mt-2 text-2xl font-semibold">
+        {props.valor}
+      </p>
+    </div>
+  );
+}
+
+function EstadoPendente(props: {
+  titulo: string;
+  descricao: string;
+}) {
+  return (
+    <div className="rounded-lg border border-dashed bg-background px-6 py-14 text-center">
+      <div className="mx-auto flex size-12 items-center justify-center rounded-full border bg-muted/40">
+        <Clock3 className="size-5 text-muted-foreground" />
+      </div>
+
+      <h2 className="mt-4 font-semibold">
+        {props.titulo}
+      </h2>
+
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+        {props.descricao}
+      </p>
+    </div>
+  );
+}
+
+function ResultadoSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-3 border-b pb-6">
+        <Skeleton className="h-8 w-40" />
+        <Skeleton className="h-7 w-2/3" />
+        <Skeleton className="h-4 w-1/3" />
+      </div>
+
+      <Card>
+        <CardContent className="p-8">
+          <div className="grid gap-6 lg:grid-cols-[1fr_260px]">
+            <div className="space-y-3">
+              <Skeleton className="h-5 w-36" />
+              <Skeleton className="h-8 w-64" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-3/4" />
+            </div>
+
+            <Skeleton className="h-40 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Skeleton className="h-10 w-full" />
+      <Skeleton className="h-72 w-full" />
+    </div>
   );
 }

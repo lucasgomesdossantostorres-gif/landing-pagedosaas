@@ -3,10 +3,20 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  ArrowRight,
+  Award,
+  BarChart3,
+  BookOpen,
+  CheckCircle2,
+  FileText,
+  LogOut,
+  TrendingUp,
+} from "lucide-react";
+
 import { createClient } from "@/lib/supabase/client";
 import {
   buscarDadosDashboard,
-  type ErroFrequente,
   type RespostaDashboard,
 } from "@/lib/services/dashboard";
 
@@ -33,16 +43,24 @@ function traduzirStatus(status: string) {
   return traducoes[status] ?? status;
 }
 
-function traduzirCategoria(category: string) {
-  const traducoes: Record<string, string> = {
-    content: "Conteúdo",
-    structure: "Estrutura",
-    language: "Linguagem",
-    argumentation: "Argumentação",
-    adherence: "Aderência ao tema",
+function classesStatus(status: string) {
+  const classes: Record<string, string> = {
+    draft:
+      "border-slate-200 bg-slate-50 text-slate-700",
+    submitted:
+      "border-amber-200 bg-amber-50 text-amber-800",
+    processing:
+      "border-blue-200 bg-blue-50 text-blue-700",
+    corrected:
+      "border-emerald-200 bg-emerald-50 text-emerald-700",
+    failed:
+      "border-red-200 bg-red-50 text-red-700",
   };
 
-  return traducoes[category] ?? category;
+  return (
+    classes[status] ??
+    "border-slate-200 bg-slate-50 text-slate-700"
+  );
 }
 
 export default function DashboardPage() {
@@ -50,11 +68,7 @@ export default function DashboardPage() {
 
   const [email, setEmail] = useState("");
   const [nome, setNome] = useState("");
-
   const [respostas, setRespostas] = useState<RespostaDashboard[]>([]);
-  const [errosFrequentes, setErrosFrequentes] =
-    useState<ErroFrequente[]>([]);
-
   const [mensagem, setMensagem] = useState("");
   const [carregando, setCarregando] = useState(true);
 
@@ -75,27 +89,52 @@ export default function DashboardPage() {
 
         setEmail(user.email ?? "");
 
-        const { data: perfil, error: perfilError } = await supabase
+        const nomeMetadados =
+          typeof user.user_metadata?.full_name ===
+          "string"
+            ? user.user_metadata.full_name.trim()
+            : typeof user.user_metadata?.name ===
+                "string"
+              ? user.user_metadata.name.trim()
+              : "";
+
+        const {
+          data: perfil,
+          error: perfilError,
+        } = await supabase
           .from("profiles")
           .select("full_name")
           .eq("id", user.id)
           .maybeSingle();
 
         if (perfilError) {
-          throw new Error(
-            `Erro ao buscar perfil: ${perfilError.message}`
+          console.warn(
+            `Não foi possível buscar o perfil público: ${perfilError.message}`,
           );
         }
 
-        setNome(perfil?.full_name ?? "");
+        const nomePerfil =
+          typeof perfil?.full_name === "string"
+            ? perfil.full_name.trim()
+            : "";
+
+        /*
+         * O nome salvo no Supabase Auth tem prioridade.
+         * A tabela profiles funciona apenas como fallback
+         * para contas antigas.
+         */
+        setNome(
+          nomeMetadados ||
+            nomePerfil ||
+            "",
+        );
 
         const resultado = await buscarDadosDashboard(
           supabase,
-          user.id
+          user.id,
         );
 
         setRespostas(resultado.respostas);
-        setErrosFrequentes(resultado.errosFrequentes);
       } catch (error) {
         const mensagemErro =
           error instanceof Error
@@ -108,14 +147,14 @@ export default function DashboardPage() {
       }
     }
 
-    carregarDashboard();
+    void carregarDashboard();
   }, [router]);
 
   const estatisticas = useMemo(() => {
     const totalRespostas = respostas.length;
 
     const respostasCorrigidas = respostas.filter(
-      (resposta) => resposta.correction_id !== null
+      (resposta) => resposta.correction_id !== null,
     );
 
     const notas = respostasCorrigidas
@@ -150,30 +189,47 @@ export default function DashboardPage() {
 
   if (carregando) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <p className="text-slate-600">
-          Carregando dashboard...
-        </p>
+      <main className="flex min-h-[70vh] items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="size-9 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
+
+          <p className="text-sm text-slate-500">
+            Carregando sua área...
+          </p>
+        </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 px-6 py-10">
-      <section className="mx-auto max-w-6xl">
-        <header className="rounded-2xl bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-6">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-                Área do aluno
-              </p>
+    <main className="min-h-screen">
+      <section className="mx-auto max-w-6xl space-y-7">
+        <header className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white p-7 shadow-sm md:p-8">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -right-16 -top-20 size-64 rounded-full bg-blue-100/70 blur-3xl"
+          />
 
-              <h1 className="mt-2 text-3xl font-bold text-slate-900">
-                {nome ? `Olá, ${nome}` : "Dashboard"}
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute right-32 top-0 size-32 rounded-full bg-cyan-100/60 blur-3xl"
+          />
+
+          <div className="relative flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <div className="mb-3 flex items-center gap-2">
+                <span className="inline-flex items-center rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-cyan-800">
+                  Área do aluno
+                </span>
+              </div>
+
+              <h1 className="text-2xl font-semibold tracking-tight text-slate-950 md:text-3xl">
+                {nome ? `Olá, ${nome}` : "Seu painel"}
               </h1>
 
-              <p className="mt-3 text-slate-600">
-                Acompanhe suas respostas, notas e evolução.
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-600">
+                Acompanhe suas respostas, notas e evolução em um único
+                lugar.
               </p>
 
               <p className="mt-2 text-sm text-slate-500">
@@ -184,249 +240,327 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={sair}
-              className="rounded-lg border border-slate-300 px-5 py-3 font-semibold text-slate-700"
+              className="
+                inline-flex items-center justify-center gap-2
+                rounded-md
+                border border-slate-300
+                bg-white
+                px-4 py-2.5
+                text-sm font-semibold text-slate-700
+                shadow-sm
+                transition
+                hover:border-slate-400
+                hover:bg-slate-50
+                hover:text-slate-950
+                focus-visible:outline-none
+                focus-visible:ring-2
+                focus-visible:ring-blue-500
+                focus-visible:ring-offset-2
+              "
             >
+              <LogOut className="size-4" />
               Sair
             </button>
           </div>
         </header>
 
         {mensagem && (
-          <p className="mt-6 rounded-lg bg-red-50 p-4 text-red-700">
-            {mensagem}
-          </p>
+          <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+            <p className="text-sm font-medium text-red-800">
+              {mensagem}
+            </p>
+          </div>
         )}
 
-        <section className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <article className="rounded-2xl bg-white p-6 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">
-              Respostas enviadas
-            </p>
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <IndicadorCard
+            titulo="Respostas enviadas"
+            valor={String(estatisticas.totalRespostas)}
+            icon={<FileText className="size-5" />}
+          />
 
-            <p className="mt-3 text-4xl font-bold text-slate-900">
-              {estatisticas.totalRespostas}
-            </p>
-          </article>
+          <IndicadorCard
+            titulo="Respostas corrigidas"
+            valor={String(estatisticas.totalCorrigidas)}
+            icon={<CheckCircle2 className="size-5" />}
+          />
 
-          <article className="rounded-2xl bg-white p-6 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">
-              Respostas corrigidas
-            </p>
+          <IndicadorCard
+            titulo="Média das notas"
+            valor={estatisticas.media.toFixed(1)}
+            icon={<TrendingUp className="size-5" />}
+            destaque
+          />
 
-            <p className="mt-3 text-4xl font-bold text-slate-900">
-              {estatisticas.totalCorrigidas}
-            </p>
-          </article>
-
-          <article className="rounded-2xl bg-white p-6 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">
-              Média das notas
-            </p>
-
-            <p className="mt-3 text-4xl font-bold text-blue-700">
-              {estatisticas.media.toFixed(1)}
-            </p>
-          </article>
-
-          <article className="rounded-2xl bg-white p-6 shadow-sm">
-            <p className="text-sm font-medium text-slate-500">
-              Melhor nota
-            </p>
-
-            <p className="mt-3 text-4xl font-bold text-blue-700">
-              {estatisticas.melhorNota.toFixed(1)}
-            </p>
-          </article>
+          <IndicadorCard
+            titulo="Melhor nota"
+            valor={estatisticas.melhorNota.toFixed(1)}
+            icon={<Award className="size-5" />}
+            destaque
+          />
         </section>
 
-        <section className="mt-8 grid gap-6 md:grid-cols-3">
+        <section className="grid gap-5 lg:grid-cols-2">
           <Link
             href="/questoes"
-            className="rounded-2xl bg-blue-600 p-8 text-white shadow-sm"
+            className="
+              group relative overflow-hidden
+              rounded-2xl
+              bg-slate-950
+              p-7 text-white
+              shadow-sm
+              transition
+              duration-200
+              hover:-translate-y-0.5
+              hover:shadow-lg
+              focus-visible:outline-none
+              focus-visible:ring-2
+              focus-visible:ring-blue-500
+              focus-visible:ring-offset-2
+            "
           >
-            <h2 className="text-2xl font-bold">
-              Responder nova questão
-            </h2>
+            <div
+              aria-hidden="true"
+              className="absolute -right-8 -top-10 size-48 rounded-full bg-blue-500/20 blur-3xl"
+            />
 
-            <p className="mt-3 leading-7 text-blue-100">
-              Escolha uma questão e envie uma nova resposta.
-            </p>
+            <div
+              aria-hidden="true"
+              className="absolute bottom-0 right-24 size-28 rounded-full bg-cyan-400/10 blur-2xl"
+            />
 
-            <span className="mt-6 inline-block font-semibold">
-              Ver questões →
-            </span>
+            <div className="relative">
+              <div className="flex size-11 items-center justify-center rounded-xl border border-white/10 bg-white/10">
+                <BookOpen className="size-5 text-cyan-300" />
+              </div>
+
+              <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-300">
+                Nova prática
+              </p>
+
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                Responder nova questão
+              </h2>
+
+              <p className="mt-3 max-w-md text-sm leading-6 text-slate-300">
+                Escolha uma questão discursiva e receba uma correção
+                detalhada.
+              </p>
+
+              <span
+                className="
+                  mt-7
+                  inline-flex items-center justify-center gap-2
+                  rounded-md
+                  bg-blue-600
+                  px-5 py-3
+                  font-semibold text-white
+                  shadow-sm
+                  transition
+                  group-hover:bg-blue-500
+                  focus-visible:outline-none
+                  focus-visible:ring-2
+                  focus-visible:ring-blue-400
+                  focus-visible:ring-offset-2
+                "
+              >
+                Ver questões
+                <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+              </span>
+            </div>
           </Link>
 
           <Link
             href="/historico"
-            className="rounded-2xl bg-white p-8 shadow-sm"
+            className="
+              group rounded-2xl
+              border border-slate-200
+              bg-white
+              p-7
+              shadow-sm
+              transition
+              duration-200
+              hover:-translate-y-0.5
+              hover:border-blue-200
+              hover:shadow-md
+              focus-visible:outline-none
+              focus-visible:ring-2
+              focus-visible:ring-blue-500
+              focus-visible:ring-offset-2
+            "
           >
-            <h2 className="text-2xl font-bold text-slate-900">
-              Histórico
-            </h2>
-
-            <p className="mt-3 leading-7 text-slate-600">
-              Consulte respostas, notas e correções anteriores.
-            </p>
-
-            <span className="mt-6 inline-block font-semibold text-blue-600">
-              Abrir histórico →
-            </span>
-          </Link>
-
-          <Link
-            href="/erros-recorrentes"
-            className="rounded-2xl bg-white p-8 shadow-sm"
-          >
-            <h2 className="text-2xl font-bold text-slate-900">
-              Erros recorrentes
-            </h2>
-
-            <p className="mt-3 leading-7 text-slate-600">
-              Veja os problemas mais frequentes nas respostas.
-            </p>
-
-            <span className="mt-6 inline-block font-semibold text-blue-600">
-              Ver análise →
-            </span>
-          </Link>
-        </section>
-
-        <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">
-                Principais erros
-              </h2>
-
-              <p className="mt-2 text-slate-600">
-                Problemas mais frequentes nas correções.
-              </p>
+            <div className="flex size-11 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+              <BarChart3 className="size-5" />
             </div>
 
-            <Link
-              href="/erros-recorrentes"
-              className="font-semibold text-blue-600"
+            <p className="mt-6 text-xs font-semibold uppercase tracking-[0.16em] text-blue-700">
+              Acompanhamento
+            </p>
+
+            <h2 className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+              Minhas respostas
+            </h2>
+
+            <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
+              Consulte suas respostas, notas e correções anteriores.
+            </p>
+
+            <span
+              className="
+                mt-7
+                inline-flex items-center justify-center gap-2
+                rounded-md
+                bg-blue-600
+                px-5 py-3
+                font-semibold text-white
+                shadow-sm
+                transition
+                group-hover:bg-blue-700
+                focus-visible:outline-none
+                focus-visible:ring-2
+                focus-visible:ring-blue-500
+                focus-visible:ring-offset-2
+              "
             >
-              Ver análise completa
-            </Link>
-          </div>
-
-          {errosFrequentes.length === 0 ? (
-            <div className="mt-6 rounded-xl bg-slate-50 p-6">
-              <p className="text-slate-600">
-                Ainda não há erros recorrentes registrados.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-6 grid gap-5 md:grid-cols-3">
-              {errosFrequentes.map((erro, indice) => (
-                <article
-                  key={erro.id}
-                  className="rounded-xl border border-slate-200 p-6"
-                >
-                  <p className="text-sm font-semibold text-blue-600">
-                    #{indice + 1}
-                  </p>
-
-                  <h3 className="mt-2 text-lg font-bold text-slate-900">
-                    {erro.name}
-                  </h3>
-
-                  <p className="mt-2 text-sm text-slate-500">
-                    {traduzirCategoria(erro.category)}
-                  </p>
-
-                  <p className="mt-5 text-3xl font-bold text-slate-900">
-                    {erro.quantidade}
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-500">
-                    {erro.quantidade === 1
-                      ? "ocorrência"
-                      : "ocorrências"}
-                  </p>
-                </article>
-              ))}
-            </div>
-          )}
+              Abrir minhas respostas
+              <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+            </span>
+          </Link>
         </section>
 
-        <section className="mt-8 rounded-2xl bg-white p-8 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-4">
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-200 px-6 py-5 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-2xl font-bold text-slate-900">
+              <h2 className="text-lg font-semibold text-slate-950">
                 Respostas recentes
               </h2>
 
-              <p className="mt-2 text-slate-600">
+              <p className="mt-1 text-sm text-slate-500">
                 Suas últimas atividades na plataforma.
               </p>
             </div>
 
             <Link
               href="/historico"
-              className="font-semibold text-blue-600"
+              className="
+                inline-flex items-center gap-2
+                text-sm font-semibold text-blue-700
+                transition
+                hover:text-blue-900
+                focus-visible:outline-none
+                focus-visible:ring-2
+                focus-visible:ring-blue-500
+                focus-visible:ring-offset-2
+              "
             >
               Ver todas
+              <ArrowRight className="size-4" />
             </Link>
           </div>
 
           {respostas.length === 0 ? (
-            <div className="mt-8 rounded-xl bg-slate-50 p-6">
-              <p className="text-slate-600">
-                Você ainda não enviou nenhuma resposta.
+            <div className="px-6 py-12 text-center">
+              <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-slate-200 bg-slate-50">
+                <FileText className="size-5 text-slate-400" />
+              </div>
+
+              <h3 className="mt-4 font-semibold text-slate-900">
+                Nenhuma resposta enviada
+              </h3>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Sua atividade aparecerá aqui depois da primeira resposta.
               </p>
+
+              <Link
+                href="/questoes"
+                className="
+                  mt-5
+                  inline-flex items-center justify-center gap-2
+                  rounded-md
+                  bg-blue-600
+                  px-5 py-3
+                  font-semibold text-white
+                  shadow-sm
+                  transition
+                  hover:bg-blue-700
+                  focus-visible:outline-none
+                  focus-visible:ring-2
+                  focus-visible:ring-blue-500
+                  focus-visible:ring-offset-2
+                "
+              >
+                Escolher uma questão
+                <ArrowRight className="size-4" />
+              </Link>
             </div>
           ) : (
-            <div className="mt-8 divide-y divide-slate-200">
+            <div className="divide-y divide-slate-200">
               {respostas.slice(0, 5).map((resposta) => (
                 <article
                   key={resposta.id}
-                  className="flex flex-wrap items-center justify-between gap-5 py-5 first:pt-0 last:pb-0"
+                  className="flex flex-col gap-5 px-6 py-5 transition hover:bg-slate-50/70 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div>
-                    <h3 className="font-bold text-slate-900">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-slate-950">
                       {resposta.question_title}
                     </h3>
 
-                    <p className="mt-2 text-sm text-slate-500">
-                      {formatarData(
-                        resposta.submitted_at ??
-                          resposta.created_at
-                      )}
-                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                      <span>
+                        {formatarData(
+                          resposta.submitted_at ??
+                            resposta.created_at,
+                        )}
+                      </span>
 
-                    <p className="mt-1 text-sm text-slate-600">
-                      Status:{" "}
-                      <span className="font-semibold">
+                      <span aria-hidden="true">•</span>
+
+                      <span
+                        className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${classesStatus(
+                          resposta.status,
+                        )}`}
+                      >
                         {traduzirStatus(resposta.status)}
                       </span>
-                    </p>
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-5">
+                  <div className="flex shrink-0 items-center justify-between gap-5 sm:justify-end">
                     {resposta.correction_id !== null ? (
-                      <div className="text-right">
-                        <p className="text-xs font-medium uppercase text-slate-500">
+                      <div className="text-left sm:text-right">
+                        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                           Nota
                         </p>
 
-                        <p className="text-2xl font-bold text-blue-700">
+                        <p className="mt-1 text-2xl font-semibold tracking-tight text-blue-700">
                           {Number(
-                            resposta.total_score ?? 0
+                            resposta.total_score ?? 0,
                           ).toFixed(1)}
                         </p>
                       </div>
                     ) : (
-                      <span className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800">
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
                         Sem correção
                       </span>
                     )}
 
                     <Link
                       href={`/respostas/${resposta.id}`}
-                      className="rounded-lg border border-slate-300 px-4 py-2 font-semibold text-slate-700"
+                      className="
+                        inline-flex items-center justify-center
+                        rounded-md
+                        bg-blue-600
+                        px-5 py-3
+                        font-semibold text-white
+                        shadow-sm
+                        transition
+                        hover:bg-blue-700
+                        focus-visible:outline-none
+                        focus-visible:ring-2
+                        focus-visible:ring-blue-500
+                        focus-visible:ring-offset-2
+                      "
                     >
                       Abrir
                     </Link>
@@ -438,5 +572,49 @@ export default function DashboardPage() {
         </section>
       </section>
     </main>
+  );
+}
+
+type IndicadorCardProps = {
+  titulo: string;
+  valor: string;
+  icon: React.ReactNode;
+  destaque?: boolean;
+};
+
+function IndicadorCard({
+  titulo,
+  valor,
+  icon,
+  destaque = false,
+}: IndicadorCardProps) {
+  return (
+    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium text-slate-500">
+            {titulo}
+          </p>
+
+          <p
+            className={`mt-3 text-3xl font-semibold tracking-tight ${
+              destaque ? "text-blue-700" : "text-slate-950"
+            }`}
+          >
+            {valor}
+          </p>
+        </div>
+
+        <div
+          className={`flex size-10 items-center justify-center rounded-xl ${
+            destaque
+              ? "bg-blue-50 text-blue-700"
+              : "bg-slate-100 text-slate-600"
+          }`}
+        >
+          {icon}
+        </div>
+      </div>
+    </article>
   );
 }

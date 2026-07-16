@@ -1,27 +1,56 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  buscarLimitesCorrecaoDoUsuario,
+  devolverCorrecaoMensal,
+  reservarCorrecaoMensal,
+} from "@/lib/correction/usage";
+
+import {
+  createAdminClient,
+} from "@/lib/supabase/admin";
+
+import {
+  createClient,
+} from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type CorpoRequisicao = {
   question_id?: number;
+  selected_question?: number;
   answer_text?: string;
 };
 
-function respostaErro(message: string, status: number) {
+function respostaErro(
+  message: string,
+  status: number,
+  extra?: Record<string, unknown>,
+) {
   return NextResponse.json(
     {
       success: false,
       error: message,
+      ...extra,
     },
-    { status },
+    {
+      status,
+    },
   );
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest,
+) {
+  let answerId: number | null = null;
+  let reservaCriada = false;
+  let periodoReservado = "";
+  let userId = "";
+
   try {
     const supabase = await createClient();
 
@@ -31,25 +60,52 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return respostaErro("Usuário não autenticado.", 401);
+      return respostaErro(
+        "Usuário não autenticado.",
+        401,
+      );
     }
+
+    userId = user.id;
 
     let body: CorpoRequisicao;
 
     try {
-      body = (await request.json()) as CorpoRequisicao;
+      body =
+        (await request.json()) as CorpoRequisicao;
     } catch {
-      return respostaErro("Corpo da requisição inválido.", 400);
+      return respostaErro(
+        "Corpo da requisição inválido.",
+        400,
+      );
     }
 
     const questionId = Number(body.question_id);
+    const selectedQuestion = Number(body.selected_question);
     const answerText =
       typeof body.answer_text === "string"
         ? body.answer_text.trim()
         : "";
 
-    if (!Number.isInteger(questionId) || questionId <= 0) {
-      return respostaErro("Identificador da questão inválido.", 400);
+    if (
+      !Number.isInteger(questionId) ||
+      questionId <= 0
+    ) {
+      return respostaErro(
+        "Identificador da prova inválido.",
+        400,
+      );
+    }
+
+    if (
+      !Number.isInteger(selectedQuestion) ||
+      selectedQuestion < 1 ||
+      selectedQuestion > 4
+    ) {
+      return respostaErro(
+        "Selecione uma questão válida entre 1 e 4.",
+        400,
+      );
     }
 
     if (answerText.length < 30) {
@@ -76,7 +132,7 @@ export async function POST(request: NextRequest) {
 
     if (validacaoError) {
       return respostaErro(
-        `Não foi possível verificar a validação da questão: ${validacaoError.message}`,
+        `Não foi possível verificar a liberação da prova: ${validacaoError.message}`,
         500,
       );
     }
@@ -87,7 +143,7 @@ export async function POST(request: NextRequest) {
       validacao.semantic_valid !== true
     ) {
       return respostaErro(
-        "A questão ainda não foi aprovada na validação semântica.",
+        "Esta prova ainda não está disponível para envio de respostas.",
         409,
       );
     }
@@ -97,22 +153,44 @@ export async function POST(request: NextRequest) {
       error: questaoError,
     } = await admin
       .from("questions")
-      .select("id")
+      .select(`
+        id,
+        status
+      `)
       .eq("id", questionId)
       .maybeSingle();
 
     if (questaoError) {
       return respostaErro(
-        `Não foi possível verificar a questão: ${questaoError.message}`,
+        `Não foi possível verificar a prova: ${questaoError.message}`,
         500,
       );
     }
 
     if (!questao) {
-      return respostaErro("Questão não encontrada.", 404);
+      return respostaErro(
+        "Prova não encontrada.",
+        404,
+      );
     }
 
-    const submittedAt = new Date().toISOString();
+    if (
+      questao.status &&
+      questao.status !== "published"
+    ) {
+      return respostaErro(
+        "Esta prova não está disponível para respostas.",
+        409,
+      );
+    }
+
+    const limites =
+      await buscarLimitesCorrecaoDoUsuario(
+        user.id,
+      );
+
+    const submittedAt =
+      new Date().toISOString();
 
     const {
       data: resposta,
@@ -122,14 +200,25 @@ export async function POST(request: NextRequest) {
       .insert({
         user_id: user.id,
         question_id: questionId,
+        selected_question:
+          selectedQuestion,
         answer_text: answerText,
         status: "submitted",
         submitted_at: submittedAt,
       })
-      .select("id")
+      .select(`
+        id,
+        question_id,
+        selected_question,
+        status,
+        submitted_at
+      `)
       .single();
 
-    if (respostaError || !resposta) {
+    if (
+      respostaError ||
+      !resposta
+    ) {
       return respostaErro(
         `Não foi possível salvar a resposta: ${
           respostaError?.message ??
@@ -139,12 +228,71 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    answerId = Number(resposta.id);
+
+    const reserva =
+      await reservarCorrecaoMensal(
+        user.id,
+        limites.monthlyCorrections,
+        answerId,
+      );
+
+    if (!reserva.allowed) {
+      await admin
+        .from("user_answers")
+        .delete()
+        .eq("id", answerId)
+        .eq("user_id", user.id);
+
+      return respostaErro(
+        `Você atingiu o limite mensal de ${limites.monthlyCorrections} correções do plano ${limites.displayName}.`,
+        429,
+        {
+          plan: limites.plan,
+          plan_name:
+            limites.displayName,
+          monthly_limit:
+            limites.monthlyCorrections,
+          used_this_month:
+            reserva.used,
+          remaining_this_month:
+            reserva.remaining,
+        },
+      );
+    }
+
+    reservaCriada = true;
+    periodoReservado =
+      reserva.periodStart;
+
     return NextResponse.json(
       {
         success: true,
         answer_id: resposta.id,
+        id: resposta.id,
+        question_id:
+          resposta.question_id,
+        selected_question:
+          resposta.selected_question,
+        status: resposta.status,
+        submitted_at:
+          resposta.submitted_at,
+
+        limits: {
+          plan: limites.plan,
+          plan_name:
+            limites.displayName,
+          monthly_limit:
+            limites.monthlyCorrections,
+          used_this_month:
+            reserva.used,
+          remaining_this_month:
+            reserva.remaining,
+        },
       },
-      { status: 201 },
+      {
+        status: 201,
+      },
     );
   } catch (error) {
     const message =
@@ -152,6 +300,41 @@ export async function POST(request: NextRequest) {
         ? error.message
         : "Erro inesperado ao salvar a resposta.";
 
-    return respostaErro(message, 500);
+    if (
+      reservaCriada &&
+      userId &&
+      periodoReservado &&
+      answerId !== null
+    ) {
+      await devolverCorrecaoMensal(
+        userId,
+        periodoReservado,
+        answerId,
+        message,
+      );
+    }
+
+    if (
+      !reservaCriada &&
+      userId &&
+      answerId !== null
+    ) {
+      try {
+        const admin = createAdminClient();
+
+        await admin
+          .from("user_answers")
+          .delete()
+          .eq("id", answerId)
+          .eq("user_id", userId);
+      } catch {
+        // Mantém o erro original.
+      }
+    }
+
+    return respostaErro(
+      message,
+      500,
+    );
   }
 }

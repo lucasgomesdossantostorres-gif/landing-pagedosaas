@@ -1,61 +1,47 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  buscarLimitesCorrecaoDoUsuario,
+  devolverCorrecaoMensal,
+  obterInicioMesDaDataBrasil,
+  registrarCorrecaoConcluida,
+  reservarCorrecaoMensal,
+} from "@/lib/correction/usage";
+
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const STAGE = "level_4_calculation";
-const PROMPT_VERSION = "nivel-4-calculo-direto-v2";
 const FIXED_PENALTY_PER_ERROR = 0.1;
+const SCORE_PRECISION = 2;
+const MINIMUM_SCORE = 0;
 
-type RequestBody = {
+type CorpoRequisicao = {
   answer_id?: number;
 };
 
-type AnswerRow = {
+type RespostaBanco = {
   id: number;
   user_id: string;
-  question_id: number;
   status: string;
+  submitted_at: string | null;
+  created_at: string;
 };
 
-type CorrectionRow = {
+type CorrecaoBanco = {
   id: number;
   answer_id: number;
-  content_score: number | null;
-  content_maximum_score: number | null;
-  language_error_count: number | null;
-  language_discount: number | null;
-  total_score: number | null;
+  content_score: number | string | null;
+  content_maximum_score: number | string | null;
+  language_error_count: number | string | null;
+  language_discount: number | string | null;
   calculation_details: unknown;
+  total_score: number | string | null;
 };
 
-type CalculatorResponse = {
-  content_score: number;
-  question_maximum_score: number;
-  language_error_count: number;
-  fixed_penalty_per_error: number;
-  language_discount: number;
-  raw_final_score: number;
-  final_score: number;
-  formula: string;
-};
-
-type CalculationDetails = {
-  content_score?: number;
-  content_maximum_score?: number;
-  language_error_count?: number;
-  fixed_penalty_per_error?: number;
-  language_discount?: number;
-  raw_final_score?: number;
-  final_score?: number;
-  question_maximum_score?: number;
-  formula?: string;
-};
-
-function errorResponse(message: string, status: number) {
+function responderErro(message: string, status: number) {
   return NextResponse.json(
     {
       success: false,
@@ -65,85 +51,51 @@ function errorResponse(message: string, status: number) {
   );
 }
 
-function numbersMatch(
-  first: number | null | undefined,
-  second: number | null | undefined,
+function numeroSeguro(
+  valor: number | string | null | undefined,
+  valorPadrao = 0,
 ) {
-  if (first === null || first === undefined) {
-    return false;
-  }
+  const numero = Number(valor);
 
-  if (second === null || second === undefined) {
-    return false;
-  }
-
-  return Math.abs(Number(first) - Number(second)) < 0.0001;
+  return Number.isFinite(numero)
+    ? numero
+    : valorPadrao;
 }
 
-function normalizeCalculatorUrl() {
-  const configuredUrl = process.env.PYTHON_CALCULATOR_URL?.trim();
-
-  if (!configuredUrl) {
-    throw new Error(
-      "A variável PYTHON_CALCULATOR_URL não está configurada.",
-    );
-  }
-
-  if (configuredUrl.endsWith("/calculate")) {
-    return configuredUrl;
-  }
-
-  return `${configuredUrl.replace(/\/+$/, "")}/calculate`;
+function limitar(
+  valor: number,
+  minimo: number,
+  maximo: number,
+) {
+  return Math.min(
+    Math.max(valor, minimo),
+    maximo,
+  );
 }
 
-function normalizeCalculationDetails(value: unknown): CalculationDetails {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value)
-  ) {
-    return {};
-  }
+function arredondar(
+  valor: number,
+  casas = SCORE_PRECISION,
+) {
+  const multiplicador = 10 ** casas;
 
-  return value as CalculationDetails;
+  return (
+    Math.round(
+      (valor + Number.EPSILON) *
+        multiplicador,
+    ) / multiplicador
+  );
 }
 
-async function registerRun(params: {
-  admin: ReturnType<typeof createAdminClient>;
-  answerId: number;
-  correctionId: number;
-  status: string;
-  inputData?: unknown;
-  outputData?: unknown;
-  processingTimeMs?: number | null;
-  errorMessage?: string | null;
-}) {
-  try {
-    await params.admin.from("correction_runs").insert({
-      answer_id: params.answerId,
-      correction_id: params.correctionId,
-      stage: STAGE,
-      status: params.status,
-      model_used: "python-fastapi",
-      prompt_version: PROMPT_VERSION,
-      input_data: params.inputData ?? null,
-      output_data: params.outputData ?? null,
-      processing_time_ms: params.processingTimeMs ?? null,
-      input_tokens: null,
-      output_tokens: null,
-      error_message: params.errorMessage ?? null,
-      created_at: new Date().toISOString(),
-    });
-  } catch {
-    // A auditoria não deve impedir o cálculo principal.
-  }
-}
-
-export async function POST(request: NextRequest) {
-  const startedAt = Date.now();
+export async function POST(
+  request: NextRequest,
+) {
+  const inicio = Date.now();
 
   let answerId: number | null = null;
-  let correctionId: number | null = null;
+  let userId = "";
+  let reservaAtiva = false;
+  let periodoReservado = "";
 
   try {
     const supabase = await createClient();
@@ -154,51 +106,80 @@ export async function POST(request: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (userError || !user) {
-      return errorResponse("Usuário não autenticado.", 401);
+      return responderErro(
+        "Usuário não autenticado.",
+        401,
+      );
     }
 
-    let body: RequestBody;
+    userId = user.id;
+
+    let body: CorpoRequisicao;
 
     try {
-      body = (await request.json()) as RequestBody;
+      body =
+        (await request.json()) as CorpoRequisicao;
     } catch {
-      return errorResponse("Corpo da requisição inválido.", 400);
+      return responderErro(
+        "Corpo da requisição inválido.",
+        400,
+      );
     }
 
     answerId = Number(body.answer_id);
 
-    if (!Number.isInteger(answerId) || answerId <= 0) {
-      return errorResponse("Identificador da resposta inválido.", 400);
+    if (
+      !Number.isInteger(answerId) ||
+      answerId <= 0
+    ) {
+      return responderErro(
+        "Identificador da resposta inválido.",
+        400,
+      );
     }
 
     const admin = createAdminClient();
 
-    const { data: answerData, error: answerError } = await admin
+    const {
+      data: respostaData,
+      error: respostaError,
+    } = await admin
       .from("user_answers")
       .select(`
         id,
         user_id,
-        question_id,
-        status
+        status,
+        submitted_at,
+        created_at
       `)
       .eq("id", answerId)
       .eq("user_id", user.id)
       .maybeSingle();
 
-    if (answerError) {
-      return errorResponse(
-        `Erro ao buscar a resposta: ${answerError.message}`,
+    if (respostaError) {
+      return responderErro(
+        `Erro ao buscar a resposta: ${respostaError.message}`,
         500,
       );
     }
 
-    if (!answerData) {
-      return errorResponse("Resposta não encontrada.", 404);
+    if (!respostaData) {
+      return responderErro(
+        "Resposta não encontrada.",
+        404,
+      );
     }
 
-    const answer = answerData as AnswerRow;
+    const resposta =
+      respostaData as RespostaBanco;
 
-    const { data: correctionData, error: correctionError } = await admin
+    const jaEstavaCorrigida =
+      resposta.status === "corrected";
+
+    const {
+      data: correcaoData,
+      error: correcaoError,
+    } = await admin
       .from("corrections")
       .select(`
         id,
@@ -207,216 +188,273 @@ export async function POST(request: NextRequest) {
         content_maximum_score,
         language_error_count,
         language_discount,
-        total_score,
-        calculation_details
+        calculation_details,
+        total_score
       `)
       .eq("answer_id", answerId)
       .maybeSingle();
 
-    if (correctionError) {
-      return errorResponse(
-        `Erro ao buscar a correção: ${correctionError.message}`,
+    if (correcaoError) {
+      return responderErro(
+        `Erro ao buscar a correção: ${correcaoError.message}`,
         500,
       );
     }
 
-    if (!correctionData) {
-      return errorResponse(
-        "O Nível 2 precisa ser concluído antes do Nível 4.",
+    if (!correcaoData) {
+      return responderErro(
+        "A análise de conteúdo ainda não foi concluída.",
         409,
       );
     }
 
-    const correction = correctionData as CorrectionRow;
-    correctionId = Number(correction.id);
+    const correcao =
+      correcaoData as CorrecaoBanco;
 
     if (
-      correction.content_score === null ||
-      correction.content_maximum_score === null
+      correcao.content_score === null ||
+      correcao.content_score === undefined
     ) {
-      return errorResponse(
-        "O Nível 2 ainda não possui nota de conteúdo completa.",
+      return responderErro(
+        "A nota de conteúdo ainda não foi calculada.",
         409,
       );
     }
 
-    if (correction.language_error_count === null) {
-      return errorResponse(
-        "O Nível 3 precisa ser concluído antes do Nível 4.",
+    if (
+      correcao.content_maximum_score === null ||
+      correcao.content_maximum_score === undefined
+    ) {
+      return responderErro(
+        "A nota máxima de conteúdo não foi registrada.",
         409,
       );
     }
 
-    const existingDetails = normalizeCalculationDetails(
-      correction.calculation_details,
+    if (
+      correcao.language_error_count === null ||
+      correcao.language_error_count === undefined
+    ) {
+      return responderErro(
+        "A análise linguística ainda não foi concluída.",
+        409,
+      );
+    }
+
+    const limites =
+      await buscarLimitesCorrecaoDoUsuario(
+        user.id,
+      );
+
+    const periodoDaResposta =
+      obterInicioMesDaDataBrasil(
+        resposta.submitted_at ??
+          resposta.created_at,
+      );
+
+    const reserva =
+      await reservarCorrecaoMensal(
+        user.id,
+        limites.monthlyCorrections,
+        answerId,
+        periodoDaResposta,
+      );
+
+    if (!reserva.allowed) {
+      return responderErro(
+        `Você atingiu o limite mensal de ${limites.monthlyCorrections} correções do plano ${limites.displayName}.`,
+        429,
+      );
+    }
+
+    reservaAtiva =
+      reserva.reservationStatus === "reserved";
+    periodoReservado = reserva.periodStart;
+
+    const notaMaxima = numeroSeguro(
+      correcao.content_maximum_score,
     );
 
-    const existingCalculationIsCurrent =
-      existingDetails.formula === "NC_MINUS_FIXED_PENALTY_TIMES_NE" &&
-      numbersMatch(existingDetails.content_score, correction.content_score) &&
-      numbersMatch(
-        existingDetails.language_error_count,
-        correction.language_error_count,
-      ) &&
-      numbersMatch(existingDetails.final_score, correction.total_score);
-
-    if (existingCalculationIsCurrent) {
-      return NextResponse.json({
-        success: true,
-        cached: true,
-        correction_id: correctionId,
-        ...existingDetails,
-      });
-    }
-
-    const calculatorInput = {
-      content_score: Number(correction.content_score),
-      question_maximum_score: Number(
-        correction.content_maximum_score,
-      ),
-      language_error_count: Number(correction.language_error_count),
-      score_precision: 2,
-    };
-
-    await registerRun({
-      admin,
-      answerId,
-      correctionId,
-      status: "processing",
-      inputData: calculatorInput,
-    });
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    let calculatorResponse: Response;
-
-    try {
-      calculatorResponse = await fetch(normalizeCalculatorUrl(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(calculatorInput),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    const calculatorBody = await calculatorResponse.json();
-
-    if (!calculatorResponse.ok) {
-      const calculatorMessage =
-        typeof calculatorBody?.detail === "string"
-          ? calculatorBody.detail
-          : "O serviço Python recusou o cálculo.";
-
-      throw new Error(calculatorMessage);
-    }
-
-    const result = calculatorBody as CalculatorResponse;
-
-    const expectedDiscount =
-      Number(correction.language_error_count) * FIXED_PENALTY_PER_ERROR;
-
-    if (!numbersMatch(result.language_discount, expectedDiscount)) {
-      throw new Error(
-        "O serviço Python retornou um desconto incompatível com a regra fixa de 0,10 por erro.",
+    if (notaMaxima <= 0) {
+      return responderErro(
+        "A nota máxima registrada é inválida.",
+        422,
       );
     }
 
-    const calculationDetails = {
-      content_score: Number(result.content_score),
-      content_maximum_score: Number(result.question_maximum_score),
-      language_error_count: Number(result.language_error_count),
-      effective_line_count: null,
-      fixed_penalty_per_error: Number(result.fixed_penalty_per_error),
-      language_error_factor: null,
-      language_discount: Number(result.language_discount),
-      raw_final_score: Number(result.raw_final_score),
-      final_score: Number(result.final_score),
-      question_maximum_score: Number(result.question_maximum_score),
-      formula: result.formula,
+    const notaConteudo = limitar(
+      numeroSeguro(correcao.content_score),
+      MINIMUM_SCORE,
+      notaMaxima,
+    );
+
+    const quantidadeErros = Math.max(
+      0,
+      Math.trunc(
+        numeroSeguro(
+          correcao.language_error_count,
+        ),
+      ),
+    );
+
+    const descontoBruto =
+      quantidadeErros *
+      FIXED_PENALTY_PER_ERROR;
+
+    const descontoLinguistico =
+      arredondar(
+        Math.min(
+          descontoBruto,
+          notaConteudo,
+        ),
+      );
+
+    const notaAntesDoLimite =
+      notaConteudo -
+      descontoLinguistico;
+
+    const notaFinal = arredondar(
+      limitar(
+        notaAntesDoLimite,
+        MINIMUM_SCORE,
+        notaMaxima,
+      ),
+    );
+
+    const calculoDetalhado = {
+      content_score: notaConteudo,
+      content_maximum_score: notaMaxima,
+      language_error_count:
+        quantidadeErros,
+      fixed_penalty_per_error:
+        FIXED_PENALTY_PER_ERROR,
+      language_discount:
+        descontoLinguistico,
+      raw_final_score:
+        notaAntesDoLimite,
+      final_score: notaFinal,
+      score_precision:
+        SCORE_PRECISION,
+      minimum_score:
+        MINIMUM_SCORE,
+      formula:
+        "content_score - (language_error_count * 0.10)",
+      calculation_engine:
+        "nextjs-fixed-language-penalty-v1",
+      calculated_at:
+        new Date().toISOString(),
     };
 
-    const { error: updateCorrectionError } = await admin
+    const {
+      data: correcaoAtualizada,
+      error: updateCorrectionError,
+    } = await admin
       .from("corrections")
       .update({
-        content_score: result.content_score,
-        content_maximum_score: result.question_maximum_score,
-        language_error_count: result.language_error_count,
-        effective_line_count: null,
-        language_discount: result.language_discount,
-        total_score: result.final_score,
-        calculation_details: calculationDetails,
+        total_score: notaFinal,
+        language_discount:
+          descontoLinguistico,
+        calculation_details:
+          calculoDetalhado,
+        processing_time_ms:
+          Date.now() - inicio,
       })
-      .eq("id", correctionId);
+      .eq("id", correcao.id)
+      .select(`
+        id,
+        total_score,
+        language_discount,
+        calculation_details
+      `)
+      .single();
 
-    if (updateCorrectionError) {
-      throw new Error(
-        `Não foi possível salvar o cálculo: ${updateCorrectionError.message}`,
+    if (
+      updateCorrectionError ||
+      !correcaoAtualizada
+    ) {
+      return responderErro(
+        `Não foi possível salvar a nota final: ${
+          updateCorrectionError?.message ??
+          "O banco não retornou a correção atualizada."
+        }`,
+        500,
       );
     }
 
-    const { error: updateAnswerError } = await admin
+    const {
+      error: updateAnswerError,
+    } = await admin
       .from("user_answers")
-      .update({ status: "corrected" })
-      .eq("id", answer.id);
+      .update({
+        status: "corrected",
+      })
+      .eq("id", resposta.id)
+      .eq("user_id", user.id);
 
     if (updateAnswerError) {
-      throw new Error(
-        `A nota foi calculada, mas o status da resposta não pôde ser atualizado: ${updateAnswerError.message}`,
+      return responderErro(
+        `A nota foi calculada, mas não foi possível atualizar o status da resposta: ${updateAnswerError.message}`,
+        500,
       );
     }
 
-    await registerRun({
-      admin,
+    /*
+     * A função do banco é idempotente: executar o Nível 4
+     * novamente não consome um segundo crédito.
+     */
+    await registrarCorrecaoConcluida(
+      user.id,
+      periodoDaResposta,
       answerId,
-      correctionId,
-      status: "completed",
-      inputData: calculatorInput,
-      outputData: calculationDetails,
-      processingTimeMs: Date.now() - startedAt,
-    });
+    );
+
+    reservaAtiva = false;
 
     return NextResponse.json({
       success: true,
-      cached: false,
-      correction_id: correctionId,
-      ...calculationDetails,
+      cached: jaEstavaCorrigida,
+      correction_id: correcao.id,
+      content_score:
+        notaConteudo,
+      content_maximum_score:
+        notaMaxima,
+      language_error_count:
+        quantidadeErros,
+      fixed_penalty_per_error:
+        FIXED_PENALTY_PER_ERROR,
+      language_discount:
+        descontoLinguistico,
+      raw_final_score:
+        notaAntesDoLimite,
+      final_score:
+        notaFinal,
+      total_score:
+        notaFinal,
+      score_precision:
+        SCORE_PRECISION,
+      calculation_details:
+        calculoDetalhado,
     });
   } catch (error) {
     const message =
       error instanceof Error
-        ? error.name === "AbortError"
-          ? "O serviço Python demorou mais de 15 segundos para responder."
-          : error.message
-        : "Erro inesperado durante o cálculo da nota.";
+        ? error.message
+        : "Erro inesperado ao calcular a nota final.";
 
     if (
-      answerId !== null &&
-      answerId > 0 &&
-      correctionId !== null &&
-      correctionId > 0
+      reservaAtiva &&
+      userId &&
+      periodoReservado &&
+      answerId !== null
     ) {
-      try {
-        const admin = createAdminClient();
-
-        await registerRun({
-          admin,
-          answerId,
-          correctionId,
-          status: "error",
-          processingTimeMs: Date.now() - startedAt,
-          errorMessage: message,
-        });
-      } catch {
-        // Mantém o erro principal.
-      }
+      await devolverCorrecaoMensal(
+        userId,
+        periodoReservado,
+        answerId,
+        message,
+      );
     }
 
-    return errorResponse(message, 500);
+    return responderErro(message, 500);
   }
 }
