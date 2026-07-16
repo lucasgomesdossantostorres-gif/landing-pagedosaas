@@ -6,19 +6,18 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MODEL = process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest";
+const MODEL = process.env.OPENAI_MODEL?.trim() || "gpt-5-mini";
 const PROMPT_VERSION = "four-levels-v3";
 
-function criarClienteMistral() {
-  const apiKey = process.env.MISTRAL_API_KEY;
+function criarClienteOpenAI() {
+  const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    throw new Error("MISTRAL_API_KEY não está configurada.");
+    throw new Error("OPENAI_API_KEY não está configurada.");
   }
 
   return new OpenAI({
     apiKey,
-    baseURL: "https://api.mistral.ai/v1",
   });
 }
 
@@ -534,7 +533,7 @@ async function runLlmStage(params: {
   const startedAt = Date.now();
 
   try {
-    const openai = criarClienteMistral();
+    const openai = criarClienteOpenAI();
 
     const response = await openai.chat.completions.create({
       model: MODEL,
@@ -756,9 +755,9 @@ export async function POST(request: Request) {
   const runIds: number[] = [];
 
   try {
-    if (!process.env.MISTRAL_API_KEY) {
+    if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json(
-        { error: "A chave da Mistral não foi configurada." },
+        { error: "A chave da OpenAI não foi configurada." },
         { status: 500 }
       );
     }
