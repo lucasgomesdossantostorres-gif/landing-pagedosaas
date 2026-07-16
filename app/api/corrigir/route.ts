@@ -3,12 +3,24 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-const MODEL = process.env.OPENAI_CORRECTION_MODEL?.trim() || "gpt-5-mini";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const MODEL = process.env.MISTRAL_MODEL?.trim() || "mistral-small-latest";
 const PROMPT_VERSION = "four-levels-v3";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function criarClienteMistral() {
+  const apiKey = process.env.MISTRAL_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("MISTRAL_API_KEY não está configurada.");
+  }
+
+  return new OpenAI({
+    apiKey,
+    baseURL: "https://api.mistral.ai/v1",
+  });
+}
 
 type RequestBody = {
   answerId?: number;
@@ -522,9 +534,12 @@ async function runLlmStage(params: {
   const startedAt = Date.now();
 
   try {
-    const response = await openai.responses.create({
+    const openai = criarClienteMistral();
+
+    const response = await openai.chat.completions.create({
       model: MODEL,
-      input: [
+      temperature: 0.2,
+      messages: [
         {
           role: "system",
           content: params.systemPrompt,
@@ -536,15 +551,17 @@ async function runLlmStage(params: {
       ],
     });
 
-    if (!response.output_text) {
+    const content = response.choices[0]?.message?.content;
+
+    if (!content) {
       throw new Error(`${params.stage} retornou resposta vazia.`);
     }
 
-    const output = parseJson(response.output_text);
+    const output = parseJson(content);
     const usage = response.usage as
       | {
-          input_tokens?: number;
-          output_tokens?: number;
+          prompt_tokens?: number;
+          completion_tokens?: number;
         }
       | undefined;
 
@@ -554,8 +571,8 @@ async function runLlmStage(params: {
         status: "completed",
         output_data: output,
         processing_time_ms: Date.now() - startedAt,
-        input_tokens: usage?.input_tokens ?? null,
-        output_tokens: usage?.output_tokens ?? null,
+        input_tokens: usage?.prompt_tokens ?? null,
+        output_tokens: usage?.completion_tokens ?? null,
         completed_at: new Date().toISOString(),
       })
       .eq("id", run.id);
@@ -729,7 +746,6 @@ async function runCalculationStage(params: {
     throw error;
   }
 }
-
 export async function POST(request: Request) {
   const admin = createAdminClient();
 
@@ -740,9 +756,9 @@ export async function POST(request: Request) {
   const runIds: number[] = [];
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env.MISTRAL_API_KEY) {
       return NextResponse.json(
-        { error: "A chave da OpenAI não foi configurada." },
+        { error: "A chave da Mistral não foi configurada." },
         { status: 500 }
       );
     }
