@@ -3,7 +3,7 @@ import {
   NextResponse,
 } from "next/server";
 
-import OpenAI from "openai";
+import { Mistral } from "@mistralai/mistralai";
 
 import {
   createAdminClient,
@@ -79,10 +79,8 @@ function criarClienteMistral() {
     );
   }
 
-  return new OpenAI({
+  return new Mistral({
     apiKey,
-    baseURL:
-      "https://api.mistral.ai/v1",
   });
 }
 
@@ -136,6 +134,54 @@ function validarMensagens(
         item !== null,
     );
 }
+
+function extrairTextoDaResposta(
+  value: unknown,
+): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (
+          typeof item === "object" &&
+          item !== null &&
+          "text" in item
+        ) {
+          return String(
+            (
+              item as {
+                text?: unknown;
+              }
+            ).text ?? "",
+          );
+        }
+
+        if (
+          typeof item === "object" &&
+          item !== null &&
+          "content" in item
+        ) {
+          return String(
+            (
+              item as {
+                content?: unknown;
+              }
+            ).content ?? "",
+          );
+        }
+
+        return "";
+      })
+      .join("")
+      .trim();
+  }
+
+  return "";
+}
+
 
 function montarLimitesResposta(
   params: {
@@ -465,43 +511,39 @@ export async function POST(
       );
 
     const response =
-      await mistral
-        .chat
-        .completions
-        .create({
-          model:
-            MODEL_NAME,
-          messages: [
-            {
+      await mistral.chat.complete({
+        model:
+          MODEL_NAME,
+        messages: [
+          {
+            role:
+              "system",
+            content:
+              prompt,
+          },
+          ...limitedContext.map(
+            (message) => ({
               role:
-                "system",
+                message.role,
               content:
-                prompt,
-            },
-            ...limitedContext.map(
-              (message) => ({
-                role:
-                  message.role,
-                content:
-                  message.content,
-              }),
-            ),
-          ],
-          max_tokens:
-            limits
-              .maximumOutputTokens,
-          temperature: 0.4,
-        });
+                message.content,
+            }),
+          ),
+        ],
+        maxTokens:
+          limits
+            .maximumOutputTokens,
+        temperature: 0.4,
+      });
 
-    const content =
-      response.choices[0]
+    const rawContent =
+      response.choices?.[0]
         ?.message?.content;
 
     const assistantMessage =
-      typeof content ===
-      "string"
-        ? content.trim()
-        : "";
+      extrairTextoDaResposta(
+        rawContent,
+      );
 
     if (!assistantMessage) {
       throw new Error(
@@ -522,13 +564,13 @@ export async function POST(
         p_input_tokens:
           Number(
             response.usage
-              ?.prompt_tokens ??
+              ?.promptTokens ??
               0,
           ),
         p_output_tokens:
           Number(
             response.usage
-              ?.completion_tokens ??
+              ?.completionTokens ??
               0,
           ),
       },
