@@ -1,3 +1,4 @@
+console.log("BUILD CORRIGIR VERSAO NOVA - 16 JUL");
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
