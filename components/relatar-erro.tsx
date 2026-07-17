@@ -131,7 +131,7 @@ export function ReportErrorButton() {
 
       {aberto && (
         <div
-          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/40 p-4 sm:items-center"
+          className="fixed inset-0 z-60 flex items-end justify-center bg-black/40 p-4 sm:items-center"
           role="dialog"
           aria-modal="true"
           aria-labelledby="report-error-title"
