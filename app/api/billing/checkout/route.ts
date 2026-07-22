@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { criarExternalReference } from "@/lib/billing/asaas";
 
 type Plan = "essential" | "pro";
 type BillingCycle = "monthly" | "yearly";
@@ -14,16 +12,25 @@ type CheckoutRequest = {
   phone?: string;
 };
 
+type AsaasCheckoutResponse = {
+  id?: string;
+  link?: string;
+  status?: string;
+  errors?: Array<{
+    description?: string;
+  }>;
+};
+
 const PLANOS = {
   essential: {
     name: "Plano Essencial",
     monthly: 124.73,
-    yearly: 1347.08,
+    yearly: 1347.76,
   },
   pro: {
     name: "Plano Pro",
     monthly: 172.46,
-    yearly: 1655.62,
+    yearly: 1657.52,
   },
 } as const;
 
@@ -35,62 +42,80 @@ function limparTelefone(value: string) {
   return value.replace(/\D/g, "");
 }
 
-function obterBaseUrl() {
+function obterBaseUrlAsaas() {
   return process.env.ASAAS_ENVIRONMENT === "production"
     ? "https://api.asaas.com"
     : "https://api-sandbox.asaas.com";
 }
 
-async function asaasFetch<T>(
-  path: string,
-  init: RequestInit,
-): Promise<T> {
+function obterAppUrl() {
+  return (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://app.simplesaprova.com.br"
+  ).replace(/\/$/, "");
+}
+
+function obterDataAtual() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function criarReferenciaExterna(
+  userId: string,
+  plan: Plan,
+  billingCycle: BillingCycle,
+) {
+  return `billing:${userId}:${plan}:${billingCycle}`;
+}
+
+async function criarCheckoutNoAsaas(
+  payload: Record<string, unknown>,
+): Promise<AsaasCheckoutResponse> {
   const apiKey = process.env.ASAAS_API_KEY;
 
   if (!apiKey) {
-    throw new Error("ASAAS_API_KEY não configurada.");
+    throw new Error("ASAAS_API_KEY não está configurada.");
   }
 
-  const response = await fetch(`${obterBaseUrl()}${path}`, {
-    ...init,
-    headers: {
-      access_token: apiKey,
-      accept: "application/json",
-      "content-type": "application/json",
-      ...init.headers,
+  const response = await fetch(
+    `${obterBaseUrlAsaas()}/v3/checkouts`,
+    {
+      method: "POST",
+      headers: {
+        access_token: apiKey,
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "SimplesAprova/1.0",
+      },
+      body: JSON.stringify(payload),
+      cache: "no-store",
     },
-    cache: "no-store",
-  });
+  );
 
-  const body = (await response.json()) as T & {
-    errors?: Array<{
-      description?: string;
-    }>;
-  };
+  let result: AsaasCheckoutResponse;
 
-  if (!response.ok) {
+  try {
+    result =
+      (await response.json()) as AsaasCheckoutResponse;
+  } catch {
     throw new Error(
-      body.errors?.[0]?.description ||
-        "Erro ao comunicar com o Asaas.",
+      "O Asaas retornou uma resposta inválida.",
     );
   }
 
-  return body;
+  if (!response.ok) {
+    throw new Error(
+      result.errors?.[0]?.description ||
+        "Não foi possível criar o checkout no Asaas.",
+    );
+  }
+
+  return result;
 }
-
-type AsaasCustomer = {
-  id: string;
-};
-
-type AsaasCustomerList = {
-  data?: AsaasCustomer[];
-};
-
-type AsaasCheckout = {
-  id: string;
-  link?: string;
-  url?: string;
-};
 
 export async function POST(request: NextRequest) {
   try {
@@ -103,12 +128,16 @@ export async function POST(request: NextRequest) {
 
     if (authError || !user) {
       return NextResponse.json(
-        { error: "Usuário não autenticado." },
+        {
+          error: "Usuário não autenticado.",
+          code: "UNAUTHENTICATED",
+        },
         { status: 401 },
       );
     }
 
-    const body = (await request.json()) as CheckoutRequest;
+    const body =
+      (await request.json()) as CheckoutRequest;
 
     const plan = body.plan;
     const billingCycle = body.billingCycle;
@@ -134,170 +163,129 @@ export async function POST(request: NextRequest) {
 
     if (cpf.length !== 11) {
       return NextResponse.json(
-        { error: "Informe um CPF válido." },
+        { error: "Informe um CPF com 11 números." },
         { status: 400 },
       );
     }
 
     if (phone.length < 10 || phone.length > 11) {
       return NextResponse.json(
-        { error: "Informe um telefone válido." },
+        {
+          error:
+            "Informe um telefone com DDD válido.",
+        },
         { status: 400 },
       );
     }
 
-    const admin = createAdminClient();
+    const selectedPlan = PLANOS[plan];
+    const isMonthly = billingCycle === "monthly";
+    const appUrl = obterAppUrl();
 
-    const { data: subscription, error: subscriptionError } =
-      await admin
-        .from("subscriptions")
-        .select("provider_customer_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+    const name =
+      user.user_metadata?.name ||
+      user.user_metadata?.full_name ||
+      user.email?.split("@")[0] ||
+      "Cliente Simples Aprova";
 
-    if (subscriptionError) {
-      throw new Error(subscriptionError.message);
-    }
-
-    let customerId =
-      subscription?.provider_customer_id ?? null;
-
-    if (!customerId) {
-      const existingCustomers =
-        await asaasFetch<AsaasCustomerList>(
-          `/v3/customers?externalReference=${encodeURIComponent(
-            user.id,
-          )}`,
-          {
-            method: "GET",
-          },
-        );
-
-      customerId =
-        existingCustomers.data?.[0]?.id ?? null;
-    }
-
-    if (!customerId) {
-      const customer =
-        await asaasFetch<AsaasCustomer>(
-          "/v3/customers",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              name:
-                user.user_metadata?.name ||
-                user.user_metadata?.full_name ||
-                user.email ||
-                "Cliente Simples Aprova",
-              cpfCnpj: cpf,
-              email: user.email,
-              mobilePhone: phone,
-              externalReference: user.id,
-              notificationDisabled: false,
-            }),
-          },
-        );
-
-      customerId = customer.id;
-    }
-
-    const { error: upsertError } = await admin
-      .from("subscriptions")
-      .upsert(
-        {
-          user_id: user.id,
-          plan: "free",
-          status: "active",
-          provider: "asaas",
-          provider_customer_id: customerId,
-        },
-        {
-          onConflict: "user_id",
-        },
+    const externalReference =
+      criarReferenciaExterna(
+        user.id,
+        plan,
+        billingCycle,
       );
 
-    if (upsertError) {
-      throw new Error(upsertError.message);
-    }
+    const payload: Record<string, unknown> = {
+      billingTypes: isMonthly
+        ? ["CREDIT_CARD"]
+        : ["PIX"],
 
-    const selectedPlan = PLANOS[plan];
+      chargeTypes: isMonthly
+        ? ["RECURRENT"]
+        : ["DETACHED"],
 
-    const isMonthly = billingCycle === "monthly";
+      minutesToExpire: 60,
+
+      externalReference,
+
+      callback: {
+        successUrl:
+          `${appUrl}/configuracoes?checkout=success`,
+        cancelUrl:
+          `${appUrl}/checkout/${
+            plan === "essential"
+              ? "essencial"
+              : "pro"
+          }?checkout=cancel`,
+        expiredUrl:
+          `${appUrl}/checkout/${
+            plan === "essential"
+              ? "essencial"
+              : "pro"
+          }?checkout=expired`,
+      },
+
+      customerData: {
+        name,
+        cpfCnpj: cpf,
+        email: user.email,
+        phone,
+      },
+
+      items: [
+        {
+          externalReference: `${plan}:${billingCycle}`,
+          name: isMonthly
+            ? `${selectedPlan.name} mensal`
+            : `${selectedPlan.name} anual`,
+          description: isMonthly
+            ? "Assinatura mensal recorrente no cartão"
+            : "Acesso anual com pagamento via Pix",
+          quantity: 1,
+          value: isMonthly
+            ? selectedPlan.monthly
+            : selectedPlan.yearly,
+        },
+      ],
+
+      ...(isMonthly
+        ? {
+            subscription: {
+              cycle: "MONTHLY",
+              nextDueDate: obterDataAtual(),
+            },
+          }
+        : {}),
+    };
 
     const checkout =
-      await asaasFetch<AsaasCheckout>(
-        "/v3/checkouts",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            billingTypes: isMonthly
-              ? ["CREDIT_CARD"]
-              : ["PIX"],
+      await criarCheckoutNoAsaas(payload);
 
-            chargeTypes: isMonthly
-              ? ["RECURRENT"]
-              : ["DETACHED"],
-
-            minutesToExpire: 60,
-
-            callback: {
-              successUrl:
-                "https://app.simplesaprova.com.br/configuracoes?checkout=success",
-              cancelUrl:
-                "https://app.simplesaprova.com.br/planos?checkout=cancel",
-              expiredUrl:
-                "https://app.simplesaprova.com.br/planos?checkout=expired",
-            },
-
-            customer: customerId,
-
-            items: [
-              {
-                name: isMonthly
-                  ? `${selectedPlan.name} mensal`
-                  : `${selectedPlan.name} anual`,
-                description: isMonthly
-                  ? "Assinatura mensal recorrente"
-                  : "Acesso anual pago via Pix",
-                quantity: 1,
-                value: isMonthly
-                  ? selectedPlan.monthly
-                  : selectedPlan.yearly,
-              },
-            ],
-
-            externalReference: criarExternalReference(
-              user.id,
-              plan,
-            ),
-
-            ...(isMonthly
-              ? {
-                  subscription: {
-                    cycle: "MONTHLY",
-                    nextDueDate: new Date()
-                      .toISOString()
-                      .slice(0, 10),
-                  },
-                }
-              : {}),
-          }),
-        },
-      );
-
-    const checkoutUrl = checkout.link || checkout.url;
-
-    if (!checkoutUrl) {
+    if (!checkout.id) {
       throw new Error(
-        "O Asaas não retornou o link do checkout.",
+        "O Asaas não retornou o identificador do checkout.",
       );
     }
 
+    /*
+     * Algumas respostas retornam o link completo.
+     * Quando vier apenas o ID, montamos a URL oficial.
+     */
+    const checkoutUrl =
+      checkout.link ||
+      `https://asaas.com/checkoutSession/show?id=${encodeURIComponent(
+        checkout.id,
+      )}`;
+
     return NextResponse.json({
+      checkoutId: checkout.id,
       checkoutUrl,
     });
   } catch (error) {
-    console.error("Erro ao criar checkout Asaas:", error);
+    console.error(
+      "Erro ao criar checkout Asaas:",
+      error,
+    );
 
     return NextResponse.json(
       {
