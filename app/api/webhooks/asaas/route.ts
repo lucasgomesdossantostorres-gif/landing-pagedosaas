@@ -23,17 +23,13 @@ type AsaasWebhookPayload = {
     externalReference?: string | null;
     status?: string;
   };
-  checkout?: {
-    id?: string;
-    status?: string;
-  };
 };
 
 export async function POST(request: NextRequest) {
-  const webhookToken = process.env.ASAAS_WEBHOOK_TOKEN;
+  const configuredToken = process.env.ASAAS_WEBHOOK_TOKEN;
 
-  if (!webhookToken) {
-    console.error("ASAAS_WEBHOOK_TOKEN não está configurado.");
+  if (!configuredToken) {
+    console.error("ASAAS_WEBHOOK_TOKEN não configurado.");
 
     return NextResponse.json(
       { error: "Webhook não configurado." },
@@ -41,11 +37,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const receivedToken = request.headers.get("asaas-access-token");
+  const receivedToken =
+    request.headers.get("asaas-access-token");
 
-  if (!receivedToken || receivedToken !== webhookToken) {
+  if (receivedToken !== configuredToken) {
+    console.error("Token inválido recebido no webhook.");
+
     return NextResponse.json(
-      { error: "Token do webhook inválido." },
+      { error: "Não autorizado." },
       { status: 401 },
     );
   }
@@ -53,17 +52,18 @@ export async function POST(request: NextRequest) {
   let payload: AsaasWebhookPayload;
 
   try {
-    payload = (await request.json()) as AsaasWebhookPayload;
+    payload =
+      (await request.json()) as AsaasWebhookPayload;
   } catch {
     return NextResponse.json(
-      { error: "Corpo da requisição inválido." },
+      { error: "JSON inválido." },
       { status: 400 },
     );
   }
 
   if (!payload.id || !payload.event) {
     return NextResponse.json(
-      { error: "Evento sem identificador ou tipo." },
+      { error: "Evento inválido." },
       { status: 400 },
     );
   }
@@ -80,27 +80,29 @@ export async function POST(request: NextRequest) {
     });
 
   if (error) {
-    /*
-     * Código 23505 = violação de chave única no PostgreSQL.
-     * Isso significa que o evento já foi recebido anteriormente.
-     */
     if (error.code === "23505") {
       return NextResponse.json(
-  { received: true },
-  { status: 200 },
-);
+        {
+          received: true,
+          duplicate: true,
+        },
+        { status: 200 },
+      );
     }
 
-    console.error("Erro ao registrar webhook do Asaas:", error);
+    console.error(
+      "Erro ao registrar webhook no Supabase:",
+      error,
+    );
 
     return NextResponse.json(
-      { error: "Não foi possível registrar o evento." },
+      { error: "Erro ao registrar evento." },
       { status: 500 },
     );
   }
 
   return NextResponse.json(
-  { received: true },
-  { status: 200 },
-);
+    { received: true },
+    { status: 200 },
+  );
 }
