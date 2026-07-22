@@ -94,6 +94,21 @@ type RespostaLimitesMentor = {
   error?: string;
 };
 
+type DadosAssinatura = {
+  success: boolean;
+  subscription?: {
+    plan: "free" | "essential" | "pro";
+    status: "active" | "pending" | "past_due" | "canceled" | "expired";
+    billing_cycle: "monthly" | "yearly" | null;
+    payment_method: "credit_card" | "pix" | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    grace_period_end: string | null;
+    cancel_at_period_end: boolean;
+  };
+  error?: string;
+};
+
 const PREFERENCES_KEY = "discursiva-ai-preferencias";
 
 const preferenciasIniciais: Preferencias = {
@@ -169,6 +184,9 @@ export default function ConfiguracoesPage() {
   const [erroLimites, setErroLimites] =
     useState("");
 
+  const [assinatura, setAssinatura] =
+    useState<DadosAssinatura["subscription"] | null>(null);
+
   const usoCorrecao =
     limitesCorrecao?.used_this_month ?? 0;
 
@@ -207,6 +225,41 @@ export default function ConfiguracoesPage() {
           ),
         )
       : 0;
+
+  function formatarDataAssinatura(
+    value?: string | null,
+  ) {
+    if (!value) {
+      return null;
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  }
+
+  function obterNomeFormaPagamento(
+    value?: "credit_card" | "pix" | null,
+  ) {
+    if (value === "credit_card") {
+      return "Cartão de crédito";
+    }
+
+    if (value === "pix") {
+      return "Pix";
+    }
+
+    return "Não informado";
+  }
 
   useEffect(() => {
     let componenteAtivo = true;
@@ -319,6 +372,7 @@ export default function ConfiguracoesPage() {
         const [
           respostaCorrecao,
           respostaMentor,
+          respostaAssinatura,
         ] = await Promise.all([
           fetch(
             "/api/correcoes/limites",
@@ -334,14 +388,23 @@ export default function ConfiguracoesPage() {
               cache: "no-store",
             },
           ),
+          fetch(
+            "/api/billing/subscription",
+            {
+              method: "GET",
+              cache: "no-store",
+            },
+          ),
         ]);
 
         const [
           dadosCorrecao,
           dadosMentor,
+          dadosAssinatura,
         ] = await Promise.all([
           respostaCorrecao.json() as Promise<LimitesCorrecao>,
           respostaMentor.json() as Promise<RespostaLimitesMentor>,
+          respostaAssinatura.json() as Promise<DadosAssinatura>,
         ]);
 
         if (!componenteAtivo) {
@@ -380,6 +443,20 @@ export default function ConfiguracoesPage() {
 
         setLimitesMentor(
           dadosMentor.limits,
+        );
+
+        if (
+          !respostaAssinatura.ok ||
+          dadosAssinatura.success !== true
+        ) {
+          throw new Error(
+            dadosAssinatura.error ??
+              "Não foi possível consultar a assinatura.",
+          );
+        }
+
+        setAssinatura(
+          dadosAssinatura.subscription ?? null,
         );
       } catch (error) {
         if (!componenteAtivo) {
@@ -615,13 +692,13 @@ export default function ConfiguracoesPage() {
     }
   }
 
-  async function cancelarAssinaturaEApagarDados() {
+  async function cancelarAssinatura() {
     limparMensagens();
     setCancelandoAssinatura(true);
 
     try {
       const response = await fetch(
-        "/api/assinatura/cancelar",
+        "/api/billing/cancel",
         {
           method: "POST",
         },
@@ -630,7 +707,7 @@ export default function ConfiguracoesPage() {
       const result =
         (await response.json()) as {
           success?: boolean;
-          message?: string;
+          currentPeriodEnd?: string | null;
           error?: string;
         };
 
@@ -645,17 +722,25 @@ export default function ConfiguracoesPage() {
       }
 
       setDialogCancelarAberto(false);
-      setMensagemSucesso(
-        result.message ||
-          "Assinatura cancelada e dados apagados.",
+
+      const dataFinal = formatarDataAssinatura(
+        result.currentPeriodEnd,
       );
 
-      setLimitesCorrecao(null);
-      setLimitesMentor(null);
+      setMensagemSucesso(
+        dataFinal
+          ? `Assinatura cancelada. Seu acesso continuará ativo até ${dataFinal}.`
+          : "Assinatura cancelada. Seu acesso continuará ativo até o fim do período já pago.",
+      );
 
-      window.setTimeout(() => {
-        window.location.reload();
-      }, 1200);
+      setAssinatura((estadoAtual) =>
+        estadoAtual
+          ? {
+              ...estadoAtual,
+              cancel_at_period_end: true,
+            }
+          : estadoAtual,
+      );
     } catch (error) {
       setMensagemErro(
         error instanceof Error
@@ -969,6 +1054,62 @@ export default function ConfiguracoesPage() {
               </div>
             </div>
           )}
+
+          {!carregandoLimites &&
+            assinatura &&
+            assinatura.plan !== "free" && (
+              <>
+                <Separator className="my-6" />
+
+                <div className="grid gap-4 rounded-lg border bg-background p-5 sm:grid-cols-2 lg:grid-cols-4">
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Cobrança
+                    </p>
+                    <p className="mt-2 text-sm font-semibold">
+                      {assinatura.billing_cycle === "yearly"
+                        ? "Anual"
+                        : "Mensal"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Pagamento
+                    </p>
+                    <p className="mt-2 text-sm font-semibold">
+                      {obterNomeFormaPagamento(
+                        assinatura.payment_method,
+                      )}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Acesso até
+                    </p>
+                    <p className="mt-2 text-sm font-semibold">
+                      {formatarDataAssinatura(
+                        assinatura.current_period_end,
+                      ) ?? "Não informado"}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Situação
+                    </p>
+                    <p className="mt-2 text-sm font-semibold">
+                      {assinatura.cancel_at_period_end
+                        ? "Cancelada ao fim do período"
+                        : assinatura.status === "past_due"
+                          ? "Pagamento pendente"
+                          : "Ativa"}
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
         </CardContent>
       </Card>
 
@@ -1372,50 +1513,68 @@ export default function ConfiguracoesPage() {
         </CardContent>
       </Card>
 
-      <Card className="border-destructive/25">
-        <CardHeader className="border-b bg-destructive/5">
-          <div className="flex items-start gap-3">
-            <div className="flex size-9 items-center justify-center rounded-md border border-destructive/30 bg-destructive/10">
-              <XCircle className="size-4 text-destructive" />
-            </div>
+      {assinatura &&
+        assinatura.plan !== "free" && (
+          <Card className="border-destructive/25">
+            <CardHeader className="border-b bg-destructive/5">
+              <div className="flex items-start gap-3">
+                <div className="flex size-9 items-center justify-center rounded-md border border-destructive/30 bg-destructive/10">
+                  <XCircle className="size-4 text-destructive" />
+                </div>
 
-            <div>
-              <CardTitle className="text-base font-semibold tracking-tight">
-                Cancelar assinatura
-              </CardTitle>
+                <div>
+                  <CardTitle className="text-base font-semibold tracking-tight">
+                    Cancelar assinatura
+                  </CardTitle>
 
-              <CardDescription>
-                Encerra a recorrência, apaga o histórico e mantém seu login no plano gratuito.
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
+                  <CardDescription>
+                    Interrompe novas cobranças e mantém seu acesso até o fim do período já pago.
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
 
-        <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-medium">
-              Cancelar e apagar dados
-            </p>
+            <CardContent className="flex flex-col gap-4 pt-6 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-medium">
+                  Encerrar renovação
+                </p>
 
-            <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
-              Todas as respostas, correções, históricos e dados de uso serão
-              apagados definitivamente. Sua conta continuará ativa e vazia.
-            </p>
-          </div>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">
+                  Seus dados, respostas e histórico não serão apagados.
+                  {formatarDataAssinatura(
+                    assinatura.current_period_end,
+                  )
+                    ? ` O plano continuará disponível até ${formatarDataAssinatura(
+                        assinatura.current_period_end,
+                      )}.`
+                    : " O plano continuará disponível até o fim do período vigente."}
+                </p>
+              </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              setDialogCancelarAberto(true)
-            }
-            className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-          >
-            <XCircle className="size-4" />
-            Cancelar assinatura
-          </Button>
-        </CardContent>
-      </Card>
+              {assinatura.cancel_at_period_end ? (
+                <Badge
+                  variant="outline"
+                  className="shrink-0 border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                >
+                  Cancelamento agendado
+                </Badge>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    setDialogCancelarAberto(true)
+                  }
+                  className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <XCircle className="size-4" />
+                  Cancelar assinatura
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
       <Card className="border-destructive/40">
         <CardHeader className="border-b bg-destructive/5">
@@ -1517,13 +1676,12 @@ export default function ConfiguracoesPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Cancelar assinatura e apagar dados?
+              Cancelar assinatura?
             </DialogTitle>
 
             <DialogDescription className="leading-6">
-              A recorrência será encerrada no Asaas e todo o histórico da
-              plataforma será apagado definitivamente. Seu login permanecerá
-              ativo no plano gratuito.
+              Novas cobranças serão interrompidas. Seus dados e histórico serão
+              preservados, e o plano continuará ativo até o fim do período já pago.
             </DialogDescription>
           </DialogHeader>
 
@@ -1543,7 +1701,7 @@ export default function ConfiguracoesPage() {
               type="button"
               variant="destructive"
               onClick={() =>
-                void cancelarAssinaturaEApagarDados()
+                void cancelarAssinatura()
               }
               disabled={cancelandoAssinatura}
             >
