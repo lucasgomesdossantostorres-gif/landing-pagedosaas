@@ -85,7 +85,10 @@ export async function POST(request: NextRequest) {
      * Isso significa que o evento já foi recebido anteriormente.
      */
     if (error.code === "23505") {
-      return new NextResponse(null, { status: 204 });
+      return NextResponse.json(
+  { received: true },
+  { status: 200 },
+);
     }
 
     console.error("Erro ao registrar webhook do Asaas:", error);
@@ -96,5 +99,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  return new NextResponse(null, { status: 204 });
+  return NextResponse.json(
+  { received: true },
+  { status: 200 },
+);
 }
