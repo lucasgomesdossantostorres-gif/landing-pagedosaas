@@ -10,6 +10,12 @@ type CheckoutRequest = {
   billingCycle?: BillingCycle;
   cpf?: string;
   phone?: string;
+  postalCode?: string;
+  address?: string;
+  addressNumber?: string;
+  complement?: string;
+  province?: string;
+  city?: string;
 };
 
 type AsaasCheckoutResponse = {
@@ -17,6 +23,7 @@ type AsaasCheckoutResponse = {
   link?: string;
   status?: string;
   errors?: Array<{
+    code?: string;
     description?: string;
   }>;
 };
@@ -34,11 +41,7 @@ const PLANOS = {
   },
 } as const;
 
-function limparDocumento(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function limparTelefone(value: string) {
+function limparNumeros(value: string) {
   return value.replace(/\D/g, "");
 }
 
@@ -55,7 +58,7 @@ function obterAppUrl() {
   ).replace(/\/$/, "");
 }
 
-function obterDataAtual() {
+function obterDataAtualBrasil() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
     year: "numeric",
@@ -141,8 +144,19 @@ export async function POST(request: NextRequest) {
 
     const plan = body.plan;
     const billingCycle = body.billingCycle;
-    const cpf = limparDocumento(body.cpf ?? "");
-    const phone = limparTelefone(body.phone ?? "");
+
+    const cpf = limparNumeros(body.cpf ?? "");
+    const phone = limparNumeros(body.phone ?? "");
+    const postalCode = limparNumeros(
+      body.postalCode ?? "",
+    );
+
+    const address = body.address?.trim() ?? "";
+    const addressNumber =
+      body.addressNumber?.trim() ?? "";
+    const complement = body.complement?.trim() ?? "";
+    const province = body.province?.trim() ?? "";
+    const city = body.city?.trim() ?? "";
 
     if (plan !== "essential" && plan !== "pro") {
       return NextResponse.json(
@@ -178,6 +192,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (postalCode.length !== 8) {
+      return NextResponse.json(
+        { error: "Informe um CEP válido." },
+        { status: 400 },
+      );
+    }
+
+    if (!address) {
+      return NextResponse.json(
+        { error: "Informe o endereço." },
+        { status: 400 },
+      );
+    }
+
+    if (!addressNumber) {
+      return NextResponse.json(
+        { error: "Informe o número do endereço." },
+        { status: 400 },
+      );
+    }
+
+    if (!province) {
+      return NextResponse.json(
+        { error: "Informe o bairro." },
+        { status: 400 },
+      );
+    }
+
+    if (!city) {
+      return NextResponse.json(
+        { error: "Informe a cidade." },
+        { status: 400 },
+      );
+    }
+
     const selectedPlan = PLANOS[plan];
     const isMonthly = billingCycle === "monthly";
     const appUrl = obterAppUrl();
@@ -194,6 +243,27 @@ export async function POST(request: NextRequest) {
         plan,
         billingCycle,
       );
+
+    const customerData: Record<string, unknown> = {
+      name,
+      cpfCnpj: cpf,
+      email: user.email,
+      phone,
+      postalCode,
+      address,
+      addressNumber,
+      province,
+    };
+
+    /*
+     * O Asaas aceita "city" como identificador numérico.
+     * Como o formulário recebe o nome da cidade, não o enviamos
+     * diretamente para evitar rejeição. O CEP ajuda o Asaas
+     * a completar os dados do município.
+     */
+    if (complement) {
+      customerData.complement = complement;
+    }
 
     const payload: Record<string, unknown> = {
       billingTypes: isMonthly
@@ -225,12 +295,7 @@ export async function POST(request: NextRequest) {
           }?checkout=expired`,
       },
 
-      customerData: {
-        name,
-        cpfCnpj: cpf,
-        email: user.email,
-        phone,
-      },
+      customerData,
 
       items: [
         {
@@ -252,7 +317,7 @@ export async function POST(request: NextRequest) {
         ? {
             subscription: {
               cycle: "MONTHLY",
-              nextDueDate: obterDataAtual(),
+              nextDueDate: obterDataAtualBrasil(),
             },
           }
         : {}),
@@ -267,10 +332,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    /*
-     * Algumas respostas retornam o link completo.
-     * Quando vier apenas o ID, montamos a URL oficial.
-     */
     const checkoutUrl =
       checkout.link ||
       `https://asaas.com/checkoutSession/show?id=${encodeURIComponent(
