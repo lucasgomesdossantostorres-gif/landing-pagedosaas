@@ -2,7 +2,6 @@
 
 import {
   type FormEvent,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -17,14 +16,10 @@ import {
   Building2,
   CalendarDays,
   CheckCircle2,
-  Clock3,
   FileText,
   HelpCircle,
   LoaderCircle,
-  RefreshCw,
   Send,
-  ShieldCheck,
-  TriangleAlert,
 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
@@ -61,25 +56,6 @@ type Questao = {
   examining_board: string | null;
   exam_name: string | null;
   exam_year: number | null;
-};
-
-type EstadoValidacao =
-  | "idle"
-  | "validating"
-  | "approved"
-  | "rejected"
-  | "error";
-
-type ResultadoValidacao = {
-  success: boolean;
-  status: "processing" | "approved" | "rejected" | "error";
-  approved: boolean;
-  cached?: boolean;
-  confidence?: number;
-  feedback?: string;
-  inconsistencies?: string[];
-  validated_at?: string;
-  error?: string;
 };
 
 type ResultadoSalvarResposta = {
@@ -138,18 +114,6 @@ export default function QuestaoPage() {
   const [carregando, setCarregando] = useState(true);
   const [enviando, setEnviando] = useState(false);
 
-  const [estadoValidacao, setEstadoValidacao] =
-    useState<EstadoValidacao>("idle");
-
-  const [feedbackValidacao, setFeedbackValidacao] =
-    useState("");
-
-  const [confiancaValidacao, setConfiancaValidacao] =
-    useState<number | null>(null);
-
-  const [resultadoEmCache, setResultadoEmCache] =
-    useState(false);
-
   const [limitesCorrecao, setLimitesCorrecao] =
     useState<LimitesCorrecao | null>(null);
 
@@ -185,11 +149,6 @@ export default function QuestaoPage() {
   const respostaValida =
     resposta.trim().length >= 30;
 
-  /*
-   * O botão permanece clicável quando a redação já possui
-   * o tamanho mínimo, mesmo sem questão selecionada.
-   * A validação da questão será feita ao tentar enviar.
-   */
   const limiteMensalAtingido =
     limitesCorrecao?.remaining_this_month === 0;
 
@@ -263,89 +222,6 @@ export default function QuestaoPage() {
       componenteAtivo = false;
     };
   }, []);
-
-  const validarQuestao = useCallback(async () => {
-    if (
-      !Number.isInteger(questionId) ||
-      questionId <= 0
-    ) {
-      return;
-    }
-
-    setEstadoValidacao("validating");
-    setFeedbackValidacao("");
-    setConfiancaValidacao(null);
-    setResultadoEmCache(false);
-
-    try {
-      const response = await fetch(
-        `/api/questoes/${questionId}/validar`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          cache: "no-store",
-        },
-      );
-
-      const resultado =
-        (await response.json()) as ResultadoValidacao;
-
-      if (
-        !response.ok ||
-        resultado.success !== true
-      ) {
-        setEstadoValidacao("error");
-
-        setFeedbackValidacao(
-          resultado.error ??
-            "Não foi possível concluir a preparação da prova.",
-        );
-
-        return;
-      }
-
-      setConfiancaValidacao(
-        typeof resultado.confidence === "number"
-          ? resultado.confidence
-          : null,
-      );
-
-      setResultadoEmCache(
-        resultado.cached === true,
-      );
-
-      if (
-        resultado.status === "approved" &&
-        resultado.approved === true
-      ) {
-        setEstadoValidacao("approved");
-
-        setFeedbackValidacao(
-          resultado.feedback ??
-            "A prova está disponível para resposta.",
-        );
-
-        return;
-      }
-
-      setEstadoValidacao("rejected");
-
-      setFeedbackValidacao(
-        resultado.feedback ??
-          "A preparação da prova exige atenção.",
-      );
-    } catch (error) {
-      const mensagemErro =
-        error instanceof Error
-          ? error.message
-          : "Erro inesperado.";
-
-      setEstadoValidacao("error");
-      setFeedbackValidacao(mensagemErro);
-    }
-  }, [questionId]);
 
   useEffect(() => {
     let componenteAtivo = true;
@@ -421,8 +297,6 @@ export default function QuestaoPage() {
 
       setQuestao(questaoData as Questao);
       setCarregando(false);
-
-      void validarQuestao();
     }
 
     void carregarQuestao();
@@ -433,7 +307,6 @@ export default function QuestaoPage() {
   }, [
     questionId,
     router,
-    validarQuestao,
   ]);
 
   function selecionarQuestao(numero: number) {
@@ -649,14 +522,6 @@ export default function QuestaoPage() {
         </div>
       </header>
 
-      <ValidationStatus
-        estado={estadoValidacao}
-        feedback={feedbackValidacao}
-        confianca={confiancaValidacao}
-        cache={resultadoEmCache}
-        onRetry={validarQuestao}
-      />
-
       <Card
         className={
           limiteMensalAtingido
@@ -752,8 +617,8 @@ export default function QuestaoPage() {
               <CardDescription className="mt-1 max-w-3xl leading-6">
                 Caso sua prova tenha apenas uma questão, marque questão 1.
                 Uma mesma prova pode conter mais de uma questão discursiva, antes de enviar sua resposta, selecione abaixo a
-  questão que você escolheu responder (as questões estão em ordem). 
-  Você pode enviar quantas respostas desejar para esta prova.
+                questão que você escolheu responder (as questões estão em ordem). 
+                Você pode enviar quantas respostas desejar para esta prova.
               </CardDescription>
             </div>
           </div>
@@ -1082,125 +947,6 @@ export default function QuestaoPage() {
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-type ValidationStatusProps = {
-  estado: EstadoValidacao;
-  feedback: string;
-  confianca: number | null;
-  cache: boolean;
-  onRetry: () => void;
-};
-
-function ValidationStatus({
-  estado,
-  feedback,
-  confianca,
-  cache,
-  onRetry,
-}: ValidationStatusProps) {
-  if (estado === "idle") {
-    return null;
-  }
-
-  if (estado === "validating") {
-    return (
-      <Alert>
-        <Clock3 className="size-4" />
-
-        <AlertTitle>
-          Preparando esta prova
-        </AlertTitle>
-
-        <AlertDescription>
-          A preparação está sendo executada em segundo
-          plano. Você já pode selecionar a questão e
-          começar a escrever.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (estado === "approved") {
-    return (
-      <Alert className="border-emerald-200 bg-emerald-50/70 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100">
-        <CheckCircle2 className="size-4 text-emerald-700 dark:text-emerald-400" />
-
-        <AlertTitle>
-          Prova disponível para correção
-        </AlertTitle>
-
-        <AlertDescription className="text-emerald-800 dark:text-emerald-200">
-          A prova está liberada para o envio de
-          respostas.
-
-          {confianca !== null && (
-            <span className="ml-1">
-              Confiança:{" "}
-              {(confianca * 100).toFixed(0)}%.
-            </span>
-          )}
-
-          {cache && (
-            <span className="ml-1">
-              Liberação já disponível no sistema.
-            </span>
-          )}
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  if (estado === "rejected") {
-    return (
-      <Alert className="border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
-        <TriangleAlert className="size-4 text-amber-700 dark:text-amber-400" />
-
-        <AlertTitle>
-          A preparação exige atenção
-        </AlertTitle>
-
-        <AlertDescription className="text-amber-800 dark:text-amber-200">
-          A resposta continua liberada. O sistema
-          utilizará os dados completos disponíveis.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  return (
-    <Alert className="border-amber-200 bg-amber-50/70 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
-      <ShieldCheck className="size-4 text-amber-700 dark:text-amber-400" />
-
-      <AlertTitle>
-        A preparação não foi concluída
-      </AlertTitle>
-
-      <AlertDescription className="space-y-3 text-amber-800 dark:text-amber-200">
-        <p>
-          Você pode continuar respondendo normalmente.
-          O sistema tentará utilizar os dados completos
-          disponíveis.
-        </p>
-
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          onClick={onRetry}
-        >
-          <RefreshCw className="size-4" />
-          Tentar novamente
-        </Button>
-
-        {feedback && (
-          <p className="sr-only">
-            Detalhe técnico: {feedback}
-          </p>
-        )}
-      </AlertDescription>
-    </Alert>
   );
 }
 
