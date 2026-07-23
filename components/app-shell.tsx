@@ -1,15 +1,29 @@
+"use client";
+
 import type { ReactNode } from "react";
-import {
-  ReportErrorButton,
-} from "@/components/relatar-erro";
+import { usePathname } from "next/navigation";
+
 import { AppHeader } from "@/components/app-header";
 import { AppSidebar } from "@/components/app-sidebar";
+import { ReportErrorButton } from "@/components/relatar-erro";
 
 type AppShellProps = {
   children: ReactNode;
 };
 
+const publicRoutes = ["/login", "/cadastro"];
+
 export function AppShell({ children }: AppShellProps) {
+  const pathname = usePathname();
+
+  const isPublicRoute = publicRoutes.some(
+    (route) => pathname === route || pathname.startsWith(`${route}/`),
+  );
+
+  if (isPublicRoute) {
+    return <>{children}</>;
+  }
+
   return (
     <div className="min-h-screen bg-muted/30">
       <AppHeader />
