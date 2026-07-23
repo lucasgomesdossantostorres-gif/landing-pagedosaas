@@ -70,7 +70,7 @@ export default function LoginPage() {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+          redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 
@@ -117,7 +117,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="w-full max-w-[460px]">
+          <div className="w-full max-w-115">
             <div className="mb-8 flex items-center gap-3 lg:hidden">
               <div className="flex size-12 items-center justify-center rounded-xl border border-blue-100 bg-blue-50">
                 <Image
@@ -303,9 +303,9 @@ export default function LoginPage() {
         </section>
 
         <aside className="relative hidden overflow-hidden bg-[linear-gradient(135deg,#0b1d4d_0%,#123c94_48%,#2563eb_100%)] p-12 text-white lg:flex lg:items-center lg:justify-center xl:p-20">
-          <div className="pointer-events-none absolute -right-32 -top-28 size-[420px] rounded-full bg-cyan-300/20 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-28 -left-20 size-[360px] rounded-full bg-blue-300/20 blur-3xl" />
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,white_1px,transparent_1px)] bg-[size:28px_28px] opacity-20" />
+          <div className="pointer-events-none absolute -right-32 -top-28 size-105 rounded-full bg-cyan-300/20 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-28 -left-20 size-90 rounded-full bg-blue-300/20 blur-3xl" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,white_1px,transparent_1px)] bg-size-[28px_28px] opacity-20" />
 
           <div className="relative z-10 w-full max-w-2xl">
             <div className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold backdrop-blur">
