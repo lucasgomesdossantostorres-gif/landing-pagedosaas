@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import {
+  getPlanAmount,
+  type BillingCycle,
+  type BillingPlan,
+} from "@/lib/billing/plans";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
-type Plan = "essential" | "pro";
-type BillingCycle = "monthly" | "yearly";
-
 type CheckoutRequest = {
-  plan?: Plan;
+  plan?: BillingPlan;
   billingCycle?: BillingCycle;
+  couponCode?: string;
   cpf?: string;
   phone?: string;
   postalCode?: string;
@@ -16,6 +20,18 @@ type CheckoutRequest = {
   complement?: string;
   province?: string;
   city?: string;
+};
+
+type CouponRow = {
+  id: string;
+  code: string;
+  discount_type: "percentage" | "fixed";
+  discount_value: number;
+  applicable_plans: string[];
+  active: boolean;
+  expires_at: string | null;
+  max_redemptions: number | null;
+  max_redemptions_per_user: number;
 };
 
 type AsaasCheckoutResponse = {
@@ -28,21 +44,19 @@ type AsaasCheckoutResponse = {
   }>;
 };
 
-const PLANOS = {
-  essential: {
-    name: "Plano Essencial",
-    monthly: 124.73,
-    yearly: 1347.76,
-  },
-  pro: {
-    name: "Plano Pro",
-    monthly: 172.46,
-    yearly: 1657.52,
-  },
-} as const;
-
 function limparNumeros(value: string) {
   return value.replace(/\D/g, "");
+}
+
+function normalizeCouponCode(value: unknown) {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function obterBaseUrlAsaas() {
@@ -69,10 +83,11 @@ function obterDataAtualBrasil() {
 
 function criarReferenciaExterna(
   userId: string,
-  plan: Plan,
+  plan: BillingPlan,
   billingCycle: BillingCycle,
+  checkoutSessionId: string,
 ) {
-  return `billing:${userId}:${plan}:${billingCycle}`;
+  return `billing:${userId}:${plan}:${billingCycle}:${checkoutSessionId}`;
 }
 
 async function criarCheckoutNoAsaas(
@@ -102,12 +117,9 @@ async function criarCheckoutNoAsaas(
   let result: AsaasCheckoutResponse;
 
   try {
-    result =
-      (await response.json()) as AsaasCheckoutResponse;
+    result = (await response.json()) as AsaasCheckoutResponse;
   } catch {
-    throw new Error(
-      "O Asaas retornou uma resposta inválida.",
-    );
+    throw new Error("O Asaas retornou uma resposta inválida.");
   }
 
   if (!response.ok) {
@@ -120,7 +132,95 @@ async function criarCheckoutNoAsaas(
   return result;
 }
 
+async function validarCupom(params: {
+  admin: ReturnType<typeof createAdminClient>;
+  code: string;
+  plan: BillingPlan;
+  userId: string;
+}) {
+  const { admin, code, plan, userId } = params;
+
+  const { data, error } = await admin
+    .from("coupons")
+    .select(`
+      id,
+      code,
+      discount_type,
+      discount_value,
+      applicable_plans,
+      active,
+      expires_at,
+      max_redemptions,
+      max_redemptions_per_user
+    `)
+    .eq("code", code)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Não foi possível consultar o cupom: ${error.message}`);
+  }
+
+  const coupon = data as CouponRow | null;
+
+  if (!coupon || !coupon.active) {
+    throw new Error("Cupom inválido ou inativo.");
+  }
+
+  if (
+    coupon.expires_at &&
+    new Date(coupon.expires_at).getTime() <= Date.now()
+  ) {
+    throw new Error("Este cupom expirou.");
+  }
+
+  if (!coupon.applicable_plans.includes(plan)) {
+    throw new Error("Este cupom não é válido para o plano selecionado.");
+  }
+
+  const [
+    { count: totalRedemptions, error: totalError },
+    { count: userRedemptions, error: userError },
+  ] = await Promise.all([
+    admin
+      .from("coupon_redemptions")
+      .select("id", { count: "exact", head: true })
+      .eq("coupon_id", coupon.id)
+      .eq("status", "confirmed"),
+    admin
+      .from("coupon_redemptions")
+      .select("id", { count: "exact", head: true })
+      .eq("coupon_id", coupon.id)
+      .eq("user_id", userId)
+      .eq("status", "confirmed"),
+  ]);
+
+  if (totalError || userError) {
+    throw new Error(
+      `Não foi possível verificar o uso do cupom: ${
+        totalError?.message || userError?.message
+      }`,
+    );
+  }
+
+  if (
+    coupon.max_redemptions !== null &&
+    (totalRedemptions ?? 0) >= coupon.max_redemptions
+  ) {
+    throw new Error("O limite de usos deste cupom foi atingido.");
+  }
+
+  if (
+    (userRedemptions ?? 0) >= coupon.max_redemptions_per_user
+  ) {
+    throw new Error("Você já utilizou este cupom.");
+  }
+
+  return coupon;
+}
+
 export async function POST(request: NextRequest) {
+  let localSessionId: string | null = null;
+
   try {
     const supabase = await createClient();
 
@@ -139,21 +239,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body =
-      (await request.json()) as CheckoutRequest;
-
+    const body = (await request.json()) as CheckoutRequest;
     const plan = body.plan;
     const billingCycle = body.billingCycle;
+    const couponCode = normalizeCouponCode(body.couponCode);
 
     const cpf = limparNumeros(body.cpf ?? "");
     const phone = limparNumeros(body.phone ?? "");
-    const postalCode = limparNumeros(
-      body.postalCode ?? "",
-    );
-
+    const postalCode = limparNumeros(body.postalCode ?? "");
     const address = body.address?.trim() ?? "";
-    const addressNumber =
-      body.addressNumber?.trim() ?? "";
+    const addressNumber = body.addressNumber?.trim() ?? "";
     const complement = body.complement?.trim() ?? "";
     const province = body.province?.trim() ?? "";
     const city = body.city?.trim() ?? "";
@@ -184,10 +279,7 @@ export async function POST(request: NextRequest) {
 
     if (phone.length < 10 || phone.length > 11) {
       return NextResponse.json(
-        {
-          error:
-            "Informe um telefone com DDD válido.",
-        },
+        { error: "Informe um telefone com DDD válido." },
         { status: 400 },
       );
     }
@@ -199,35 +291,79 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!address) {
+    if (!address || !addressNumber || !province || !city) {
       return NextResponse.json(
-        { error: "Informe o endereço." },
+        { error: "Preencha todos os dados obrigatórios do endereço." },
         { status: 400 },
       );
     }
 
-    if (!addressNumber) {
+    const admin = createAdminClient();
+    const originalAmount = getPlanAmount(plan, billingCycle);
+
+    let coupon: CouponRow | null = null;
+    let discountAmount = 0;
+
+    if (couponCode) {
+      coupon = await validarCupom({
+        admin,
+        code: couponCode,
+        plan,
+        userId: user.id,
+      });
+
+      discountAmount =
+        coupon.discount_type === "percentage"
+          ? roundMoney(
+              originalAmount * (coupon.discount_value / 100),
+            )
+          : Math.min(
+              roundMoney(coupon.discount_value),
+              originalAmount,
+            );
+    }
+
+    const finalAmount = Math.max(
+      roundMoney(originalAmount - discountAmount),
+      0,
+    );
+
+    if (finalAmount < 5) {
       return NextResponse.json(
-        { error: "Informe o número do endereço." },
+        {
+          error:
+            "O valor final ficou abaixo do mínimo permitido para este checkout.",
+        },
         { status: 400 },
       );
     }
 
-    if (!province) {
-      return NextResponse.json(
-        { error: "Informe o bairro." },
-        { status: 400 },
+    const { data: sessionData, error: sessionError } = await admin
+      .from("billing_checkout_sessions")
+      .insert({
+        user_id: user.id,
+        plan,
+        billing_cycle: billingCycle,
+        coupon_id: coupon?.id ?? null,
+        coupon_code: coupon?.code ?? null,
+        original_amount: originalAmount,
+        discount_amount: discountAmount,
+        final_amount: finalAmount,
+        status: "pending",
+      })
+      .select("id")
+      .single();
+
+    if (sessionError || !sessionData?.id) {
+      throw new Error(
+        `Não foi possível registrar o checkout: ${
+          sessionError?.message || "identificador não retornado"
+        }`,
       );
     }
 
-    if (!city) {
-      return NextResponse.json(
-        { error: "Informe a cidade." },
-        { status: 400 },
-      );
-    }
+    localSessionId = String(sessionData.id);
 
-    const selectedPlan = PLANOS[plan];
     const isMonthly = billingCycle === "monthly";
     const appUrl = obterAppUrl();
 
@@ -237,12 +373,12 @@ export async function POST(request: NextRequest) {
       user.email?.split("@")[0] ||
       "Cliente Simples Aprova";
 
-    const externalReference =
-      criarReferenciaExterna(
-        user.id,
-        plan,
-        billingCycle,
-      );
+    const externalReference = criarReferenciaExterna(
+      user.id,
+      plan,
+      billingCycle,
+      localSessionId,
+    );
 
     const customerData: Record<string, unknown> = {
       name,
@@ -255,64 +391,50 @@ export async function POST(request: NextRequest) {
       province,
     };
 
-    /*
-     * O Asaas aceita "city" como identificador numérico.
-     * Como o formulário recebe o nome da cidade, não o enviamos
-     * diretamente para evitar rejeição. O CEP ajuda o Asaas
-     * a completar os dados do município.
-     */
     if (complement) {
       customerData.complement = complement;
     }
+
+    const planName =
+      plan === "essential" ? "Plano Essencial" : "Plano Pro";
 
     const payload: Record<string, unknown> = {
       billingTypes: isMonthly
         ? ["CREDIT_CARD"]
         : ["PIX"],
-
       chargeTypes: isMonthly
         ? ["RECURRENT"]
         : ["DETACHED"],
-
       minutesToExpire: 60,
-
       externalReference,
-
       callback: {
         successUrl:
           `${appUrl}/configuracoes?checkout=success`,
         cancelUrl:
           `${appUrl}/checkout/${
-            plan === "essential"
-              ? "essencial"
-              : "pro"
+            plan === "essential" ? "essencial" : "pro"
           }?checkout=cancel`,
         expiredUrl:
           `${appUrl}/checkout/${
-            plan === "essential"
-              ? "essencial"
-              : "pro"
+            plan === "essential" ? "essencial" : "pro"
           }?checkout=expired`,
       },
-
       customerData,
-
       items: [
         {
-          externalReference: `${plan}:${billingCycle}`,
+          externalReference,
           name: isMonthly
-            ? `${selectedPlan.name} mensal`
-            : `${selectedPlan.name} anual`,
-          description: isMonthly
-            ? "Assinatura mensal recorrente no cartão"
-            : "Acesso anual com pagamento via Pix",
+            ? `${planName} mensal`
+            : `${planName} anual`,
+          description: coupon
+            ? `${isMonthly ? "Assinatura mensal" : "Acesso anual"} com cupom ${coupon.code}`
+            : isMonthly
+              ? "Assinatura mensal recorrente no cartão"
+              : "Acesso anual com pagamento via Pix",
           quantity: 1,
-          value: isMonthly
-            ? selectedPlan.monthly
-            : selectedPlan.yearly,
+          value: finalAmount,
         },
       ],
-
       ...(isMonthly
         ? {
             subscription: {
@@ -323,12 +445,26 @@ export async function POST(request: NextRequest) {
         : {}),
     };
 
-    const checkout =
-      await criarCheckoutNoAsaas(payload);
+    const checkout = await criarCheckoutNoAsaas(payload);
 
     if (!checkout.id) {
       throw new Error(
         "O Asaas não retornou o identificador do checkout.",
+      );
+    }
+
+    const { error: updateError } = await admin
+      .from("billing_checkout_sessions")
+      .update({
+        asaas_checkout_id: checkout.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", localSessionId);
+
+    if (updateError) {
+      console.error(
+        "Checkout criado, mas a sessão local não foi atualizada:",
+        updateError.message,
       );
     }
 
@@ -341,12 +477,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       checkoutId: checkout.id,
       checkoutUrl,
+      originalAmount,
+      discountAmount,
+      finalAmount,
+      couponCode: coupon?.code ?? null,
     });
   } catch (error) {
-    console.error(
-      "Erro ao criar checkout Asaas:",
-      error,
-    );
+    if (localSessionId) {
+      try {
+        const admin = createAdminClient();
+        await admin
+          .from("billing_checkout_sessions")
+          .update({
+            status: "failed",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", localSessionId);
+      } catch {
+        // O erro principal será devolvido ao usuário.
+      }
+    }
+
+    console.error("Erro ao criar checkout Asaas:", error);
 
     return NextResponse.json(
       {

@@ -40,6 +40,7 @@ type BillingReference = {
   userId: string;
   plan: Plan;
   billingCycle: BillingCycle;
+  checkoutSessionId: string | null;
 };
 
 type SubscriptionRow = {
@@ -91,10 +92,10 @@ function interpretarExternalReference(
   const userId = parts[1];
   const plan = parts[2];
   const billingCycle = parts[3];
+  const checkoutSessionId = parts[4] || null;
 
   /*
-   * Compatibilidade com referências que possam ter
-   * algum sufixo adicional no futuro.
+   * O quinto segmento identifica a sessão local do checkout.
    */
   const normalizedBillingCycle =
     billingCycle === "monthly" ||
@@ -126,6 +127,7 @@ function interpretarExternalReference(
     userId,
     plan,
     billingCycle: normalizedBillingCycle,
+    checkoutSessionId,
   };
 }
 
@@ -171,6 +173,7 @@ function interpretarExternalReferenceLegada(
     userId,
     plan,
     billingCycle,
+    checkoutSessionId: null,
   };
 }
 
@@ -324,6 +327,7 @@ async function resolverAssinatura(
     userId: existing.user_id,
     plan: existing.plan,
     billingCycle,
+    checkoutSessionId: null,
   };
 }
 
@@ -373,6 +377,146 @@ async function processarAssinaturaCriada(
   if (error) {
     throw new Error(
       `Erro ao registrar assinatura: ${error.message}`,
+    );
+  }
+}
+
+async function confirmarCupomDaSessao(params: {
+  checkoutSessionId: string;
+  paymentId: string;
+  userId: string;
+}) {
+  const admin = createAdminClient();
+
+  const { data, error } = await admin
+    .from("billing_checkout_sessions")
+    .select(`
+      id,
+      coupon_id,
+      coupon_code,
+      discount_amount,
+      status
+    `)
+    .eq("id", params.checkoutSessionId)
+    .eq("user_id", params.userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `Erro ao consultar a sessão do checkout: ${error.message}`,
+    );
+  }
+
+  if (!data) {
+    return;
+  }
+
+  const { error: sessionError } = await admin
+    .from("billing_checkout_sessions")
+    .update({
+      status: "paid",
+      provider_payment_id: params.paymentId,
+      paid_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", params.checkoutSessionId);
+
+  if (sessionError) {
+    throw new Error(
+      `Erro ao confirmar a sessão do checkout: ${sessionError.message}`,
+    );
+  }
+
+  if (!data.coupon_id) {
+    return;
+  }
+
+  const { data: existingRedemption, error: existingError } =
+    await admin
+      .from("coupon_redemptions")
+      .select("id, status")
+      .eq("checkout_session_id", params.checkoutSessionId)
+      .maybeSingle();
+
+  if (existingError) {
+    throw new Error(
+      `Erro ao verificar o resgate do cupom: ${existingError.message}`,
+    );
+  }
+
+  if (existingRedemption?.status === "confirmed") {
+    return;
+  }
+
+  if (existingRedemption) {
+    const { error: updateError } = await admin
+      .from("coupon_redemptions")
+      .update({
+        status: "confirmed",
+        provider_payment_id: params.paymentId,
+        confirmed_at: new Date().toISOString(),
+      })
+      .eq("id", existingRedemption.id);
+
+    if (updateError) {
+      throw new Error(
+        `Erro ao confirmar o resgate do cupom: ${updateError.message}`,
+      );
+    }
+
+    return;
+  }
+
+  const { error: insertError } = await admin
+    .from("coupon_redemptions")
+    .insert({
+      coupon_id: data.coupon_id,
+      user_id: params.userId,
+      checkout_session_id: params.checkoutSessionId,
+      provider_payment_id: params.paymentId,
+      discount_amount: Number(data.discount_amount ?? 0),
+      status: "confirmed",
+      confirmed_at: new Date().toISOString(),
+    });
+
+  if (insertError) {
+    throw new Error(
+      `Erro ao registrar o uso do cupom: ${insertError.message}`,
+    );
+  }
+}
+
+async function reverterCupomDaSessao(params: {
+  checkoutSessionId: string;
+  paymentId: string | null;
+}) {
+  const admin = createAdminClient();
+
+  await admin
+    .from("billing_checkout_sessions")
+    .update({
+      status: "reversed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", params.checkoutSessionId);
+
+  const query = admin
+    .from("coupon_redemptions")
+    .update({
+      status: "reversed",
+      reversed_at: new Date().toISOString(),
+    })
+    .eq("checkout_session_id", params.checkoutSessionId);
+
+  if (params.paymentId) {
+    query.eq("provider_payment_id", params.paymentId);
+  }
+
+  const { error } = await query;
+
+  if (error) {
+    throw new Error(
+      `Erro ao reverter o uso do cupom: ${error.message}`,
     );
   }
 }
@@ -454,6 +598,14 @@ async function processarPagamentoConfirmado(
       `Erro ao ativar o plano: ${error.message}`,
     );
   }
+
+  if (resolved.checkoutSessionId) {
+    await confirmarCupomDaSessao({
+      checkoutSessionId: resolved.checkoutSessionId,
+      paymentId: payment.id,
+      userId: resolved.userId,
+    });
+  }
 }
 
 async function processarPagamentoVencido(
@@ -520,6 +672,13 @@ async function processarPagamentoRevertido(
     throw new Error(
       `Erro ao reverter o plano: ${error.message}`,
     );
+  }
+
+  if (resolved.checkoutSessionId) {
+    await reverterCupomDaSessao({
+      checkoutSessionId: resolved.checkoutSessionId,
+      paymentId: payload.payment?.id ?? null,
+    });
   }
 }
 

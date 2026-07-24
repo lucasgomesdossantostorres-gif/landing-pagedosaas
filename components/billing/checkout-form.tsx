@@ -7,6 +7,11 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 
+import {
+  BILLING_PLANS,
+  formatCurrency,
+} from "@/lib/billing/plans";
+
 type Plan = "essential" | "pro";
 type BillingCycle = "monthly" | "yearly";
 
@@ -14,39 +19,7 @@ type CheckoutFormProps = {
   plan: Plan;
 };
 
-const PLANOS = {
-  essential: {
-    name: "Essencial",
-    monthly: "R$ 124,73",
-    yearly: "R$ 1.347,76",
-    yearlyDiscount: "10% de desconto",
-    description:
-      "Para quem estuda com frequência e precisa acompanhar continuamente sua evolução.",
-    features: [
-      "50 correções discursivas por mês",
-      "30 mensagens por dia no Mentor IA",
-      "Feedback detalhado de conteúdo",
-      "Estimativa educacional de pontuação",
-      "Acompanhamento de desempenho",
-    ],
-  },
-  pro: {
-    name: "Pro",
-    monthly: "R$ 172,46",
-    yearly: "R$ 1.657,52",
-    yearlyDiscount: "20% de desconto",
-    description:
-      "Para candidatos com rotina intensiva e maior volume de treinamento discursivo.",
-    features: [
-      "70 correções discursivas por mês",
-      "60 mensagens por dia no Mentor IA",
-      "Feedback detalhado de conteúdo",
-      "Estimativa educacional de pontuação",
-      "Acompanhamento de desempenho",
-      "Respostas mais extensas no Mentor IA",
-    ],
-  },
-} as const;
+const PLANOS = BILLING_PLANS;
 
 function formatarCpf(value: string) {
   const numbers = value
@@ -116,9 +89,19 @@ export function CheckoutForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const [couponCode, setCouponCode] = useState("");
+  const [validatingCoupon, setValidatingCoupon] =
+    useState(false);
+  const [couponError, setCouponError] = useState("");
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string;
+    discountAmount: number;
+    finalAmount: number;
+  } | null>(null);
+
   const selectedPlan = PLANOS[plan];
 
-  const displayedPrice = useMemo(() => {
+  const originalAmount = useMemo(() => {
     return billingCycle === "monthly"
       ? selectedPlan.monthly
       : selectedPlan.yearly;
@@ -127,6 +110,87 @@ export function CheckoutForm({
     selectedPlan.monthly,
     selectedPlan.yearly,
   ]);
+
+  const displayedPrice =
+    appliedCoupon?.finalAmount ?? originalAmount;
+
+  async function applyCoupon() {
+    const normalizedCode = couponCode
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, "");
+
+    if (!normalizedCode) {
+      setCouponError("Digite um cupom.");
+      setAppliedCoupon(null);
+      return;
+    }
+
+    setValidatingCoupon(true);
+    setCouponError("");
+    setError("");
+
+    try {
+      const response = await fetch(
+        "/api/billing/coupon/validate",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            code: normalizedCode,
+            plan,
+            billingCycle,
+          }),
+        },
+      );
+
+      const result = (await response.json()) as {
+        success?: boolean;
+        coupon?: {
+          code?: string;
+        };
+        discountAmount?: number;
+        finalAmount?: number;
+        error?: string;
+      };
+
+      if (
+        !response.ok ||
+        result.success !== true ||
+        !result.coupon?.code ||
+        typeof result.discountAmount !== "number" ||
+        typeof result.finalAmount !== "number"
+      ) {
+        throw new Error(
+          result.error || "Não foi possível aplicar o cupom.",
+        );
+      }
+
+      setCouponCode(result.coupon.code);
+      setAppliedCoupon({
+        code: result.coupon.code,
+        discountAmount: result.discountAmount,
+        finalAmount: result.finalAmount,
+      });
+    } catch (caughtError) {
+      setAppliedCoupon(null);
+      setCouponError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Não foi possível aplicar o cupom.",
+      );
+    } finally {
+      setValidatingCoupon(false);
+    }
+  }
+
+  function removeCoupon() {
+    setAppliedCoupon(null);
+    setCouponCode("");
+    setCouponError("");
+  }
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
@@ -151,6 +215,7 @@ export function CheckoutForm({
           body: JSON.stringify({
             plan,
             billingCycle,
+            couponCode: appliedCoupon?.code,
             cpf,
             phone,
             postalCode,
@@ -293,9 +358,11 @@ export function CheckoutForm({
             <div className="mt-6 grid gap-3">
               <button
                 type="button"
-                onClick={() =>
-                  setBillingCycle("monthly")
-                }
+                onClick={() => {
+                  setBillingCycle("monthly");
+                  setAppliedCoupon(null);
+                  setCouponError("");
+                }}
                 className={optionClass(
                   billingCycle === "monthly",
                 )}
@@ -312,16 +379,18 @@ export function CheckoutForm({
                   </div>
 
                   <p className="font-bold text-slate-950 dark:text-white">
-                    {selectedPlan.monthly}
+                    {formatCurrency(selectedPlan.monthly)}
                   </p>
                 </div>
               </button>
 
               <button
                 type="button"
-                onClick={() =>
-                  setBillingCycle("yearly")
-                }
+                onClick={() => {
+                  setBillingCycle("yearly");
+                  setAppliedCoupon(null);
+                  setCouponError("");
+                }}
                 className={optionClass(
                   billingCycle === "yearly",
                 )}
@@ -338,16 +407,75 @@ export function CheckoutForm({
 
                     <span className="mt-2 inline-flex rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                       {
-                        selectedPlan.yearlyDiscount
+                        selectedPlan.yearlyDiscountLabel
                       }
                     </span>
                   </div>
 
                   <p className="font-bold text-slate-950 dark:text-white">
-                    {selectedPlan.yearly}
+                    {formatCurrency(selectedPlan.yearly)}
                   </p>
                 </div>
               </button>
+            </div>
+
+
+            <div className="mt-7 rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
+              <label
+                htmlFor="coupon"
+                className="text-sm font-semibold text-slate-900 dark:text-slate-100"
+              >
+                Cupom de desconto
+              </label>
+
+              <div className="mt-2 flex gap-2">
+                <input
+                  id="coupon"
+                  name="coupon"
+                  value={couponCode}
+                  onChange={(event) => {
+                    setCouponCode(
+                      event.target.value.toUpperCase(),
+                    );
+                    setAppliedCoupon(null);
+                    setCouponError("");
+                  }}
+                  placeholder="Digite seu cupom"
+                  disabled={validatingCoupon || Boolean(appliedCoupon)}
+                  className={inputClass}
+                />
+
+                {appliedCoupon ? (
+                  <button
+                    type="button"
+                    onClick={removeCoupon}
+                    className="mt-2 shrink-0 rounded-2xl border border-slate-300 px-4 py-3.5 text-sm font-semibold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+                  >
+                    Remover
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void applyCoupon()}
+                    disabled={validatingCoupon}
+                    className="mt-2 shrink-0 rounded-2xl bg-slate-900 px-4 py-3.5 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60 dark:bg-slate-100 dark:text-slate-950"
+                  >
+                    {validatingCoupon ? "Validando..." : "Aplicar"}
+                  </button>
+                )}
+              </div>
+
+              {appliedCoupon && (
+                <p className="mt-3 text-sm font-medium text-emerald-700 dark:text-emerald-300">
+                  Cupom {appliedCoupon.code} aplicado com sucesso.
+                </p>
+              )}
+
+              {couponError && (
+                <p className="mt-3 text-sm text-red-700 dark:text-red-300">
+                  {couponError}
+                </p>
+              )}
             </div>
 
             <div className="mt-7 space-y-5">
@@ -568,9 +696,21 @@ export function CheckoutForm({
                 </span>
 
                 <div className="text-right">
+                  {appliedCoupon && (
+                    <p className="text-sm text-slate-400 line-through">
+                      {formatCurrency(originalAmount)}
+                    </p>
+                  )}
+
                   <p className="text-2xl font-bold text-slate-950 dark:text-white">
-                    {displayedPrice}
+                    {formatCurrency(displayedPrice)}
                   </p>
+
+                  {appliedCoupon && (
+                    <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                      Economia de {formatCurrency(appliedCoupon.discountAmount)}
+                    </p>
+                  )}
 
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-300">
                     {billingCycle === "monthly"
