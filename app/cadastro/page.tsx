@@ -117,17 +117,8 @@ export default function CadastroPage() {
         
         {/* COLUNA ESQUERDA - FORMULÁRIO */}
         <section className="relative flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12 xl:px-20">
-          <div className="absolute left-8 top-8 hidden items-center gap-3 lg:flex">
-            <div className="flex size-11 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 shadow-sm">
-              <img
-  src="/simples-aprova-auth-logo.png"
-  alt="Simples Aprova.AI"
-  width="40"
-  height="40"
-  className="size-9 object-contain"
-/>
-            </div>
-            <div>
+          <div className="absolute right-8 top-8 hidden items-center justify-end gap-3 lg:flex">
+            <div className="text-right">
               <p className="text-base font-extrabold tracking-[-0.02em]">
                 Simples Aprova.AI
               </p>
@@ -135,24 +126,35 @@ export default function CadastroPage() {
                 Correção por IA para concursos
               </p>
             </div>
+
+            <div className="flex size-11 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 shadow-sm">
+              <img
+                src="/simples-aprova-auth-logo.png"
+                alt="Simples Aprova.AI"
+                width="40"
+                height="40"
+                className="size-9 object-contain"
+              />
+            </div>
           </div>
 
           <div className="w-full max-w-115">
-            <div className="mb-8 flex items-center gap-3 lg:hidden">
-              <div className="flex size-12 items-center justify-center rounded-xl border border-blue-100 bg-blue-50">
-                <img
-  src="/simples-aprova-auth-logo.png"
-  alt="Simples Aprova.AI"
-  width="42"
-  height="42"
-  className="size-10 object-contain"
-/>
-              </div>
-              <div>
+            <div className="mb-8 flex items-center justify-end gap-3 lg:hidden">
+              <div className="text-right">
                 <p className="font-extrabold">Simples Aprova.AI</p>
                 <p className="text-xs text-slate-500">
                   Correção por IA para concursos
                 </p>
+              </div>
+
+              <div className="flex size-12 items-center justify-center rounded-xl border border-blue-100 bg-blue-50">
+                <img
+                  src="/simples-aprova-auth-logo.png"
+                  alt="Simples Aprova.AI"
+                  width="42"
+                  height="42"
+                  className="size-10 object-contain"
+                />
               </div>
             </div>
 
