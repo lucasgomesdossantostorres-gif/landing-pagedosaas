@@ -282,6 +282,7 @@ async function resolverAssinatura(
   userId: string;
   plan: Plan;
   billingCycle: BillingCycle;
+  checkoutSessionId: string | null;
 } | null> {
   const externalReference =
     payload.payment?.externalReference ??
