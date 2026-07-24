@@ -368,13 +368,6 @@ export default function RespostaPage() {
     [correcao?.weaknesses],
   );
 
-  /*
-   * Cada etapa só é considerada concluída quando os campos
-   * específicos dela realmente foram preenchidos.
-   *
-   * Não verificamos apenas language_error_count porque essa
-   * coluna pode ter valor padrão 0 antes da análise linguística.
-   */
   const nivel2Concluido = Boolean(
     correcao?.content_feedback?.trim() &&
       correcao.content_score !== null &&
@@ -423,6 +416,12 @@ export default function RespostaPage() {
           100,
         )
       : 0;
+
+  // Variável que verifica se estamos aguardando a correção de conteúdo
+  const estaProcessandoConteudo =
+    executandoNivel2 ||
+    resposta?.status === "processing" ||
+    resposta?.status === "correcting";
 
   async function executarEtapa(paramsExecucao: {
     endpoint: string;
@@ -536,19 +535,19 @@ export default function RespostaPage() {
                 {traduzirStatus(resposta.status)}
               </Badge>
               <Badge variant="secondary">
-  Questão {numeroQuestaoSelecionada}
-</Badge>
+                Questão {numeroQuestaoSelecionada}
+              </Badge>
             </div>
 
             <div>
               <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
-  {questao.title ||
-    questao.exam_name ||
-    "Resultado da correção"}
-  <span className="text-muted-foreground">
-    {" — "}Questão {numeroQuestaoSelecionada}
-  </span>
-</h1>
+                {questao.title ||
+                  questao.exam_name ||
+                  "Resultado da correção"}
+                <span className="text-muted-foreground">
+                  {" — "}Questão {numeroQuestaoSelecionada}
+                </span>
+              </h1>
 
               {questao.exam_name && (
                 <p className="mt-2 text-sm text-muted-foreground">
@@ -775,54 +774,56 @@ export default function RespostaPage() {
                   </p>
                 </CardContent>
               </Card>
-{correcao.criteria_feedback &&
-  correcao.criteria_feedback.length > 0 && (
-    <section className="rounded-2xl border bg-white">
-      <div className="border-b px-6 py-5">
-        <h2 className="font-semibold text-slate-900">
-          Avaliação por critério
-        </h2>
 
-        <p className="text-sm text-slate-500">
-          Análise individual das exigências do enunciado.
-        </p>
-      </div>
+              {correcao.criteria_feedback &&
+                correcao.criteria_feedback.length > 0 && (
+                  <section className="rounded-2xl border bg-white">
+                    <div className="border-b px-6 py-5">
+                      <h2 className="font-semibold text-slate-900">
+                        Avaliação por critério
+                      </h2>
 
-      <div className="space-y-4 p-6">
-        {correcao.criteria_feedback.map(
-          (item, index) => (
-            <div
-              key={`${item.criterion}-${index}`}
-              className="rounded-xl border p-4"
-            >
-              <div className="mb-2 flex items-center justify-between gap-4">
-                <h3 className="font-medium text-slate-900">
-                  {item.criterion}
-                </h3>
+                      <p className="text-sm text-slate-500">
+                        Análise individual das exigências do enunciado.
+                      </p>
+                    </div>
 
-                <span className="rounded-full border px-3 py-1 text-xs font-medium">
-                  {item.status === "atendeu" &&
-                    "Atendeu"}
+                    <div className="space-y-4 p-6">
+                      {correcao.criteria_feedback.map(
+                        (item, index) => (
+                          <div
+                            key={`${item.criterion}-${index}`}
+                            className="rounded-xl border p-4"
+                          >
+                            <div className="mb-2 flex items-center justify-between gap-4">
+                              <h3 className="font-medium text-slate-900">
+                                {item.criterion}
+                              </h3>
 
-                  {item.status ===
-                    "atendeu_parcialmente" &&
-                    "Atendeu parcialmente"}
+                              <span className="rounded-full border px-3 py-1 text-xs font-medium">
+                                {item.status === "atendeu" &&
+                                  "Atendeu"}
 
-                  {item.status ===
-                    "nao_atendeu" &&
-                    "Não atendeu"}
-                </span>
-              </div>
+                                {item.status ===
+                                  "atendeu_parcialmente" &&
+                                  "Atendeu parcialmente"}
 
-              <p className="text-sm leading-6 text-slate-700">
-                {item.evaluation}
-              </p>
-            </div>
-          ),
-        )}
-      </div>
-    </section>
-  )}
+                                {item.status ===
+                                  "nao_atendeu" &&
+                                  "Não atendeu"}
+                              </span>
+                            </div>
+
+                            <p className="text-sm leading-6 text-slate-700">
+                              {item.evaluation}
+                            </p>
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </section>
+                )}
+              
               <div className="grid gap-6 lg:grid-cols-2">
                 <ListaFeedback
                   titulo="Pontos fortes"
@@ -882,10 +883,18 @@ export default function RespostaPage() {
               className="space-y-6 pt-4"
             >
               {!nivel3Concluido ? (
-                <EstadoPendente
-                  titulo="Análise linguística pendente"
-                  descricao="Execute o Nível 3 para identificar as ocorrências linguísticas."
-                />
+                executandoNivel3 ? (
+                  <EstadoPendente
+                    titulo="Analisando ocorrências..."
+                    descricao="Aguarde enquanto a inteligência artificial avalia a linguagem da sua resposta."
+                    carregando={true}
+                  />
+                ) : (
+                  <EstadoPendente
+                    titulo="Análise linguística pendente"
+                    descricao="Execute o Nível 3 para identificar as ocorrências linguísticas."
+                  />
+                )
               ) : (
                 <>
                   <Card>
@@ -1059,6 +1068,12 @@ export default function RespostaPage() {
             </TabsContent>
           </Tabs>
         </>
+      ) : estaProcessandoConteudo ? (
+        <EstadoPendente
+          titulo="Analisando o Nível 2..."
+          descricao="Aguarde enquanto a inteligência artificial avalia o conteúdo da sua resposta."
+          carregando={true}
+        />
       ) : (
         <EstadoPendente
           titulo="A correção ainda não foi iniciada"
@@ -1252,11 +1267,16 @@ function Indicador(props: {
 function EstadoPendente(props: {
   titulo: string;
   descricao: string;
+  carregando?: boolean;
 }) {
   return (
     <div className="rounded-lg border border-dashed bg-background px-6 py-14 text-center">
       <div className="mx-auto flex size-12 items-center justify-center rounded-full border bg-muted/40">
-        <Clock3 className="size-5 text-muted-foreground" />
+        {props.carregando ? (
+          <LoaderCircle className="size-5 animate-spin text-primary" />
+        ) : (
+          <Clock3 className="size-5 text-muted-foreground" />
+        )}
       </div>
 
       <h2 className="mt-4 font-semibold">

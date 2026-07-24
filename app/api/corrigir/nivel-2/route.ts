@@ -543,40 +543,7 @@ export async function POST(
       );
     }
 
-    const {
-      data: validacao,
-      error: validacaoError,
-    } = await admin
-      .from("question_validations")
-      .select(`
-        status,
-        semantic_valid,
-        feedback,
-        confidence
-      `)
-      .eq(
-        "question_id",
-        resposta.question_id,
-      )
-      .maybeSingle();
-
-    if (validacaoError) {
-      return responderErro(
-        `Erro ao verificar a validação da questão: ${validacaoError.message}`,
-        500,
-      );
-    }
-
-    if (
-      !validacao ||
-      validacao.status !== "approved" ||
-      validacao.semantic_valid !== true
-    ) {
-      return responderErro(
-        "A questão não está aprovada no Nível 1.",
-        409,
-      );
-    }
+    // Removido o bloco de verificação da tabela question_validations (Nível 1)
 
     const {
       data: correcaoExistenteData,
@@ -814,12 +781,8 @@ export async function POST(
       improvement_suggestions: null,
 
       validation_status: "adequate",
-      validation_feedback:
-        validacao.feedback ??
-        "Questão aprovada no Nível 1.",
-      validation_confidence: Number(
-        validacao.confidence ?? 0,
-      ),
+      validation_feedback: "Validação de nível 1 desativada.",
+      validation_confidence: 1,
 
       total_score: contentScore,
       calculation_details: null,

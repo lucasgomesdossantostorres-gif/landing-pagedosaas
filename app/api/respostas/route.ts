@@ -117,36 +117,7 @@ export async function POST(
 
     const admin = createAdminClient();
 
-    const {
-      data: validacao,
-      error: validacaoError,
-    } = await admin
-      .from("question_validations")
-      .select(`
-        status,
-        semantic_valid,
-        validated_at
-      `)
-      .eq("question_id", questionId)
-      .maybeSingle();
-
-    if (validacaoError) {
-      return respostaErro(
-        `Não foi possível verificar a liberação da prova: ${validacaoError.message}`,
-        500,
-      );
-    }
-
-    if (
-      !validacao ||
-      validacao.status !== "approved" ||
-      validacao.semantic_valid !== true
-    ) {
-      return respostaErro(
-        "Esta prova ainda não está disponível para envio de respostas.",
-        409,
-      );
-    }
+    // BLOCO DE VALIDAÇÃO (NÍVEL 1) REMOVIDO DAQUI
 
     const {
       data: questao,
