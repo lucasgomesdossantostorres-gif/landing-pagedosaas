@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -150,14 +149,13 @@ export default function LoginPage() {
         <section className="relative flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12 xl:px-20">
           <div className="absolute left-8 top-8 hidden items-center gap-3 lg:flex">
             <div className="flex size-11 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 shadow-sm">
-              <Image
-                src="/public/Logo12.png"
-                alt="Logo Simples Aprova.AI"
-                width={40}
-                height={40}
-                className="size-9 object-contain"
-                priority
-              />
+              <img
+  src="/simples-aprova-auth-logo.png"
+  alt="Simples Aprova.AI"
+  width="40"
+  height="40"
+  className="size-9 object-contain"
+/>
             </div>
             <div>
               <p className="text-base font-extrabold tracking-[-0.02em]">
@@ -172,14 +170,13 @@ export default function LoginPage() {
           <div className="w-full max-w-115">
             <div className="mb-8 flex items-center gap-3 lg:hidden">
               <div className="flex size-12 items-center justify-center rounded-xl border border-blue-100 bg-blue-50">
-                <Image
-                  src="/public/Logo12.png"
-                  alt="Logo Simples Aprova.AI"
-                  width={42}
-                  height={42}
-                  className="size-10 object-contain"
-                  priority
-                />
+                <img
+  src="/simples-aprova-auth-logo.png"
+  alt="Simples Aprova.AI"
+  width="42"
+  height="42"
+  className="size-10 object-contain"
+/>
               </div>
               <div>
                 <p className="font-extrabold">Simples Aprova.AI</p>
