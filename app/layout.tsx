@@ -1,4 +1,13 @@
 import type { Metadata } from "next";
+
+import { AppShell } from "@/components/app-shell";
+import {
+  ThemeBootstrap,
+} from "@/components/theme-bootstrap";
+import {
+  ThemeSync,
+} from "@/components/theme-sync";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -12,6 +21,12 @@ export const metadata: Metadata = {
   description:
     "Treine redações discursivas para concursos com feedback detalhado por inteligência artificial, análise de conteúdo, linguagem e estimativa de nota.",
 
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/apple-icon.png",
+  },
+
   alternates: {
     canonical: "/",
   },
@@ -19,26 +34,6 @@ export const metadata: Metadata = {
   robots: {
     index: true,
     follow: true,
-  },
-
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon.png", type: "image/png", sizes: "512x512" },
-    ],
-    apple: [
-      { url: "/apple-icon.png", type: "image/png", sizes: "180x180" },
-    ],
-  },
-
-  openGraph: {
-    title: "Simples Aprova.AI",
-    description:
-      "Correção de redações para concursos com feedback detalhado por inteligência artificial.",
-    url: "https://simplesaprova.com.br",
-    siteName: "Simples Aprova.AI",
-    locale: "pt_BR",
-    type: "website",
   },
 };
 
@@ -48,8 +43,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="pt-BR">
-      <body>{children}</body>
+    <html
+      lang="pt-BR"
+      suppressHydrationWarning
+    >
+      <head>
+        <ThemeBootstrap />
+      </head>
+
+      <body>
+        <ThemeSync />
+
+        <AppShell>
+          {children}
+        </AppShell>
+      </body>
     </html>
   );
 }
