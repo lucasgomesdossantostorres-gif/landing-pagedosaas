@@ -130,6 +130,34 @@ function aplicarTema(tema: Tema) {
   root.classList.toggle("dark", usarEscuro);
 }
 
+async function lerRespostaJson<T>(
+  response: Response,
+  nomeDaRota: string,
+): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const corpo = await response.text();
+
+  if (!contentType.includes("application/json")) {
+    const pareceHtml =
+      corpo.trimStart().startsWith("<!DOCTYPE") ||
+      corpo.trimStart().startsWith("<html");
+
+    throw new Error(
+      pareceHtml
+        ? `${nomeDaRota} retornou uma página HTML em vez de JSON (status ${response.status}). Verifique se a rota existe e se não está sendo redirecionada.`
+        : `${nomeDaRota} retornou um formato inválido (status ${response.status}).`,
+    );
+  }
+
+  try {
+    return JSON.parse(corpo) as T;
+  } catch {
+    throw new Error(
+      `${nomeDaRota} retornou um JSON inválido (status ${response.status}).`,
+    );
+  }
+}
+
 export default function ConfiguracoesPage() {
   const router = useRouter();
 
@@ -402,9 +430,18 @@ export default function ConfiguracoesPage() {
           dadosMentor,
           dadosAssinatura,
         ] = await Promise.all([
-          respostaCorrecao.json() as Promise<LimitesCorrecao>,
-          respostaMentor.json() as Promise<RespostaLimitesMentor>,
-          respostaAssinatura.json() as Promise<DadosAssinatura>,
+          lerRespostaJson<LimitesCorrecao>(
+            respostaCorrecao,
+            "A rota /api/correcoes/limites",
+          ),
+          lerRespostaJson<RespostaLimitesMentor>(
+            respostaMentor,
+            "A rota /api/mentor",
+          ),
+          lerRespostaJson<DadosAssinatura>(
+            respostaAssinatura,
+            "A rota /api/billing/subscription",
+          ),
         ]);
 
         if (!componenteAtivo) {
