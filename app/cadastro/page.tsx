@@ -121,7 +121,7 @@ export default function CadastroPage() {
           <div className="absolute left-8 top-8 hidden items-center gap-3 lg:flex">
             <div className="flex size-11 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 shadow-sm">
               <Image
-                src="/images/Logo1.png"
+                src="/public/favicon.ico"
                 alt="Logo Simples Aprova.AI"
                 width={40}
                 height={40}
@@ -143,7 +143,7 @@ export default function CadastroPage() {
             <div className="mb-8 flex items-center gap-3 lg:hidden">
               <div className="flex size-12 items-center justify-center rounded-xl border border-blue-100 bg-blue-50">
                 <Image
-                  src="/images/Logo1.png"
+                  src="/public/favicon.ico"
                   alt="Logo Simples Aprova.AI"
                   width={42}
                   height={42}

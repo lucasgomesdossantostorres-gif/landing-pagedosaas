@@ -1070,14 +1070,14 @@ export default function RespostaPage() {
         </>
       ) : estaProcessandoConteudo ? (
         <EstadoPendente
-          titulo="Analisando o Nível 2..."
+          titulo="Analisando o Nível 1..."
           descricao="Aguarde enquanto a inteligência artificial avalia o conteúdo da sua resposta."
           carregando={true}
         />
       ) : (
         <EstadoPendente
           titulo="A correção ainda não foi iniciada"
-          descricao="Execute o Nível 2 para receber a nota, o feedback e acessar o gabarito oficial."
+          descricao="Execute o Nível 1 para receber a nota, o feedback e acessar o gabarito oficial."
         />
       )}
     </div>
