@@ -8,6 +8,7 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowLeft,
   Bell,
   BookOpenCheck,
   Bot,
@@ -880,6 +881,14 @@ export default function ConfiguracoesPage() {
 
   return (
     <div className="mx-auto max-w-4xl space-y-6">
+      <Link
+        href="/dashboard"
+        aria-label="Voltar ao dashboard"
+        className="inline-flex size-10 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+      >
+        <ArrowLeft className="size-5" />
+      </Link>
+
       <header className="space-y-2 border-b pb-6">
         <div className="flex items-center gap-2">
           <Settings className="size-5 text-muted-foreground" />

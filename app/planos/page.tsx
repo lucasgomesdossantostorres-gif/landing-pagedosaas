@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import {
   BILLING_PLANS,
@@ -15,7 +15,15 @@ export default function PlanosPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-12 text-slate-950 dark:bg-slate-950 dark:text-slate-100 sm:px-6">
       <div className="mx-auto max-w-6xl">
-        <header className="mx-auto max-w-3xl text-center">
+        <Link
+          href="/dashboard"
+          aria-label="Voltar ao início"
+          className="inline-flex size-11 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-indigo-500 dark:hover:bg-slate-800 dark:hover:text-indigo-300"
+        >
+          <ArrowLeft className="size-5" />
+        </Link>
+
+        <header className="mx-auto mt-2 max-w-3xl text-center">
           <span className="text-sm font-semibold uppercase tracking-[0.16em] text-indigo-600 dark:text-indigo-400">
             Planos Simples Aprova.AI
           </span>
