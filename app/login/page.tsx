@@ -241,7 +241,12 @@ export default function LoginPage() {
               <div>
                 <div className="mb-2 flex items-center justify-between gap-4">
                   <label htmlFor="senha" className="block text-sm font-bold text-slate-800">Senha</label>
-                  <span className="text-xs font-semibold text-slate-400">Acesso seguro</span>
+                  <Link
+                     href="/esqueci-senha"
+                     className="text-xs font-bold text-blue-700 transition hover:text-blue-900"
+                   >
+                     Esqueci minha senha
+                   </Link>
                 </div>
                 <div className="relative">
                   <LockKeyhole className="pointer-events-none absolute left-4 top-1/2 size-5 -translate-y-1/2 text-slate-400" />
