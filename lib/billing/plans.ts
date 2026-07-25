@@ -12,6 +12,7 @@ export const BILLING_PLANS = {
     features: [
   "Ilimitadas correções discursivas por mês",
   "10 mensagens por dia no Mentor IA",
+  "+900 questões discursivas de concurso",
   "Feedback detalhado de conteúdo",
   "Estimativa educacional de pontuação",
   "Acompanhamento de desempenho",
@@ -26,6 +27,7 @@ export const BILLING_PLANS = {
     yearlyDiscountLabel: "10% de desconto",
    features: [
   "Ilimitadas correções discursivas por mês",
+  "+900 questões discursivas de concurso",
   "25 mensagens por dia no Mentor IA",
   "Feedback detalhado de conteúdo",
   "Estimativa educacional de pontuação",
