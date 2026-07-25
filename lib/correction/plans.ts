@@ -22,13 +22,13 @@ export const CORRECTION_PLAN_LIMITS: Record<
   essential: {
     plan: "essential",
     displayName: "Essencial",
-    monthlyCorrections: 7,
+    monthlyCorrections: 60,
   },
 
   pro: {
     plan: "pro",
     displayName: "Pro",
-    monthlyCorrections: 20,
+    monthlyCorrections: 60,
   },
 };
 
