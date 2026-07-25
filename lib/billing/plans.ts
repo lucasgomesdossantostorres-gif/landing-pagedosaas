@@ -10,12 +10,12 @@ export const BILLING_PLANS = {
     yearly: 320.76,
     yearlyDiscountLabel: "10% de desconto",
     features: [
-      "50 correções discursivas por mês",
-      "30 mensagens por dia no Mentor IA",
-      "Feedback detalhado de conteúdo",
-      "Estimativa educacional de pontuação",
-      "Acompanhamento de desempenho",
-    ],
+  "7 correções discursivas por mês",
+  "10 mensagens por dia no Mentor IA",
+  "Feedback detalhado de conteúdo",
+  "Estimativa educacional de pontuação",
+  "Acompanhamento de desempenho",
+],
   },
   pro: {
     name: "Pro",
@@ -24,14 +24,14 @@ export const BILLING_PLANS = {
     monthly: 47.9,
     yearly: 517.32,
     yearlyDiscountLabel: "10% de desconto",
-    features: [
-      "70 correções discursivas por mês",
-      "60 mensagens por dia no Mentor IA",
-      "Feedback detalhado de conteúdo",
-      "Estimativa educacional de pontuação",
-      "Acompanhamento de desempenho",
-      "Respostas mais extensas no Mentor IA",
-    ],
+   features: [
+  "20 correções discursivas por mês",
+  "25 mensagens por dia no Mentor IA",
+  "Feedback detalhado de conteúdo",
+  "Estimativa educacional de pontuação",
+  "Acompanhamento de desempenho",
+  "Respostas mais extensas no Mentor IA",
+],
   },
 } as const;
 

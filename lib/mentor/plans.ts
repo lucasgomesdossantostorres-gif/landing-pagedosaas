@@ -21,25 +21,25 @@ export const MENTOR_PLAN_LIMITS: Record<
     displayName: "Gratuito",
     dailyMessages: 2,
     maximumUserCharacters: 1000,
-    contextMessages: 4,
+    contextMessages: 3,
     maximumOutputTokens: 500,
   },
 
   essential: {
     plan: "essential",
     displayName: "Essencial",
-    dailyMessages: 20,
+    dailyMessages: 10,
     maximumUserCharacters: 2000,
-    contextMessages: 6,
+    contextMessages: 5,
     maximumOutputTokens: 875,
   },
 
   pro: {
     plan: "pro",
     displayName: "Pro",
-    dailyMessages: 60,
+    dailyMessages: 25,
     maximumUserCharacters: 4000,
-    contextMessages: 10,
+    contextMessages: 6,
     maximumOutputTokens: 1250,
   },
 };
