@@ -22,12 +22,24 @@ import {
   criarPromptMentor,
 } from "@/lib/mentor/prompt";
 
+import {
+  evaluateMentorScope,
+} from "@/lib/mentor/scope";
+
+import {
+  sendMentorModerationEmail,
+} from "@/lib/notifications/admin";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MODEL_NAME =
   process.env.MISTRAL_MENTOR_MODEL ||
   "mistral-small-2603";
+
+const SCOPE_MODEL_NAME =
+  process.env.MISTRAL_SCOPE_MODEL ||
+  MODEL_NAME;
 
 type MentorMessage = {
   role: "user" | "assistant";
@@ -404,11 +416,95 @@ export async function POST(
       );
     }
 
-    usageDate =
-      obterDataDeUsoBrasil();
+    const scopeDecision =
+      await evaluateMentorScope({
+        mistral,
+        model: SCOPE_MODEL_NAME,
+        messages,
+      });
 
     const admin =
       createAdminClient();
+
+    if (!scopeDecision.allowed) {
+      const {
+        data: moderationEvent,
+        error: moderationError,
+      } = await admin
+        .from("mentor_moderation_events")
+        .insert({
+          user_id: user.id,
+          user_email: user.email ?? null,
+          message: lastMessage.content,
+          category: scopeDecision.category,
+          reason: scopeDecision.reason,
+          confidence: scopeDecision.confidence,
+          classifier_used:
+            scopeDecision.classifierUsed,
+          email_notified: false,
+        })
+        .select("id")
+        .single();
+
+      if (moderationError) {
+        console.error(
+          "Não foi possível registrar a mensagem fora do escopo:",
+          moderationError.message,
+        );
+      }
+
+      const eventId =
+        typeof moderationEvent?.id ===
+        "string"
+          ? moderationEvent.id
+          : null;
+
+      const emailSent =
+        await sendMentorModerationEmail({
+          userId: user.id,
+          userEmail: user.email ?? null,
+          message: lastMessage.content,
+          category: scopeDecision.category,
+          reason: scopeDecision.reason,
+          confidence: scopeDecision.confidence,
+          eventId,
+        });
+
+      if (emailSent && eventId) {
+        const {
+          error: emailUpdateError,
+        } = await admin
+          .from("mentor_moderation_events")
+          .update({
+            email_notified: true,
+          })
+          .eq("id", eventId);
+
+        if (emailUpdateError) {
+          console.error(
+            "Não foi possível atualizar o status do alerta:",
+            emailUpdateError.message,
+          );
+        }
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          message:
+            "O Mentor IA é dedicado à preparação para concursos públicos. Relacione sua pergunta aos estudos, provas, disciplinas, redações ou carreira pública para que eu possa ajudar.",
+          blocked: true,
+        },
+        {
+          headers: {
+            "Cache-Control": "no-store",
+          },
+        },
+      );
+    }
+
+    usageDate =
+      obterDataDeUsoBrasil();
 
     const {
       data:
